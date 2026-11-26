@@ -284,15 +284,19 @@ def _extract_dropdown_info(ws_val, wb_data, current_sheet):
     col_options = {}
     dv_ranges = []
     if ws_val and hasattr(ws_val, "data_validations"):
-        for dv in ws_val.data_validations.dataValidation:
-            if dv.type == "list":
+        for dv in getattr(ws_val.data_validations, "dataValidation", []) or []:
+            try:
+                if getattr(dv, "type", None) != "list":
+                    continue
                 options_str = _resolve_validation_options(dv.formula1, wb_data, current_sheet)
-                if not options_str:
+                if not options_str or not getattr(dv, "sqref", None):
                     continue
                 for rng in dv.sqref.ranges:
                     dv_ranges.append((rng.min_row, rng.max_row, rng.min_col - 1, rng.max_col - 1, options_str))
                     for col_idx in range(rng.min_col, rng.max_col + 1):
                         col_options[col_idx - 1] = options_str
+            except Exception:
+                continue
     return col_options, dv_ranges
 
 
@@ -370,11 +374,11 @@ def _is_footer_row(row_texts_raw):
 
 def _detect_strategy1_columns(sheet):
     """
-    Scan rows 1..15 of a sheet for a Strategy 1 table header containing distinct
+    Scan rows 1..30 of a sheet for a Strategy 1 table header containing distinct
     checkpoint and description columns (ignoring Document No. / Equipment metadata rows).
     Returns (header_row, col_map, header_texts) or (None, {}, []).
     """
-    for ri, row in enumerate(sheet.iter_rows(min_row=1, max_row=15, values_only=True), start=1):
+    for ri, row in enumerate(sheet.iter_rows(min_row=1, max_row=30, values_only=True), start=1):
         texts = [_norm(v) for v in row]
         # Ignore metadata banner rows (e.g. "Document No. WMS/CHECKLIST" contains "no." and "check")
         if any(t.startswith(("document no", "equipment name")) for t in texts if t):
@@ -726,10 +730,11 @@ def _looks_like_text_csv(file_bytes):
 
 def import_uploaded_excel(file_obj, template_name):
     """
-    Parse an uploaded Excel file into a new ChecklistTemplate.
-    Supports .xlsx/.xlsm, legacy .xls (converted via LibreOffice to preserve
-    dropdown validations), XML/HTML spreadsheets, and CSV files saved with an
-    Excel extension. Returns (template, items_created).
+    Parse an uploaded Excel / spreadsheet file into a new ChecklistTemplate.
+    Supports .xlsx, .xlsm, .xlx, legacy .xls, .xlsb, .ods (converted/repaired
+    via LibreOffice when needed while preserving dropdown validations),
+    XML/HTML spreadsheets, and CSV/TSV files saved with an Excel extension.
+    Returns (template, items_created).
     """
     if hasattr(file_obj, "read"):
         file_bytes = file_obj.read()
@@ -742,16 +747,18 @@ def import_uploaded_excel(file_obj, template_name):
     if not file_bytes:
         raise ValueError("The uploaded file is empty.")
 
+    orig_name = (getattr(file_obj, "name", "") or str(file_obj)).lower()
+
     if not file_bytes.startswith(_ZIP_MAGICS):
         # 1. Check for encrypted OLE2 Excel workbook
         if file_bytes.startswith(_OLE2_MAGIC) and b"E\x00n\x00c\x00r\x00y\x00p\x00t\x00e\x00d\x00P\x00a\x00c\x00k\x00a\x00g\x00e" in file_bytes:
             raise ValueError("This Excel file is password-protected or encrypted. Please remove the password and re-upload.")
 
-        # 2. Check if it's actually a CSV/TSV saved with .xls/.xlsx extension
+        # 2. Check if it's actually a CSV/TSV saved with .xls/.xlsx/.xlx extension
         if not file_bytes.startswith(_OLE2_MAGIC) and _looks_like_text_csv(file_bytes):
             return import_uploaded_csv(io.BytesIO(file_bytes), template_name)
 
-        # 3. Convert legacy .xls / XML / HTML / ODS to .xlsx via LibreOffice
+        # 3. Convert legacy .xls / XML / HTML / XLX to .xlsx via LibreOffice
         head_low = file_bytes[:512].lstrip().lower()
         if file_bytes.startswith(_OLE2_MAGIC):
             src_ext = ".xls"
@@ -770,14 +777,34 @@ def import_uploaded_excel(file_obj, template_name):
                 "Could not open this Excel file (it is not a standard .xlsx ZIP workbook). "
                 "Please re-save it as 'Excel Workbook (.xlsx)' or '.csv' and upload again."
             )
+    else:
+        # ZIP-backed formats that openpyxl cannot read directly (.ods, .xlsb)
+        if orig_name.endswith(".ods") or b"application/vnd.oasis.opendocument.spreadsheet" in file_bytes[:256]:
+            converted = _convert_via_libreoffice(file_bytes, ".ods")
+            if converted:
+                file_bytes = converted
+        elif orig_name.endswith(".xlsb") or b"xl/workbook.bin" in file_bytes[:4096]:
+            converted = _convert_via_libreoffice(file_bytes, ".xlsb")
+            if converted:
+                file_bytes = converted
 
     try:
         wb_data = load_workbook(io.BytesIO(file_bytes), data_only=True)
-    except zipfile.BadZipFile as exc:
-        raise ValueError(
-            "Invalid or corrupted Excel file (not a valid .xlsx archive). "
-            "Please open and re-save it as '.xlsx' or '.csv' and upload again."
-        ) from exc
+    except Exception as exc:
+        # Attempt automatic LibreOffice repair for strict OOXML / malformed SCADA Excel exports
+        repaired = _convert_via_libreoffice(file_bytes, ".xlsx")
+        if repaired:
+            try:
+                wb_data = load_workbook(io.BytesIO(repaired), data_only=True)
+                file_bytes = repaired
+            except Exception as exc2:
+                raise ValueError(
+                    "Invalid or corrupted Excel file. Please open and re-save it as '.xlsx' or '.csv' and upload again."
+                ) from exc2
+        else:
+            raise ValueError(
+                "Invalid or corrupted Excel file. Please open and re-save it as '.xlsx' or '.csv' and upload again."
+            ) from exc
 
     try:
         wb_val = load_workbook(io.BytesIO(file_bytes), data_only=False)

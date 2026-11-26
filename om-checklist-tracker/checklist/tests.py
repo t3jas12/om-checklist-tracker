@@ -843,6 +843,25 @@ Legends:,,,Signature,check & done by,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
         self.assertEqual(tmpl_xls.items.count(), 14)
         self.assertEqual(tmpl_xls.items.get(checkpoint_no=4).get_choices_list(), ["Done", "Pending", "N/A"])
 
+        # 3. .xlx and .xlsm extensions accepted (both OOXML and OLE2 contents)
+        xlx_upload = SimpleUploadedFile("wms_report.xlx", xls_bytes, content_type="application/octet-stream")
+        resp_xlx = self.client.post("/manage/checklists/", {
+            "template_name": "WMS XLX",
+            "file": xlx_upload,
+        })
+        tmpl_xlx = ChecklistTemplate.objects.get(name="WMS XLX")
+        self.assertRedirects(resp_xlx, f"/manage/checklists/{tmpl_xlx.pk}/preview/")
+        self.assertEqual(tmpl_xlx.items.count(), 14)
+
+        xlsm_upload = SimpleUploadedFile("wms_report.xlsm", xlsx_bytes, content_type="application/vnd.ms-excel.sheet.macroEnabled.12")
+        resp_xlsm = self.client.post("/manage/checklists/", {
+            "template_name": "WMS XLSM",
+            "file": xlsm_upload,
+        })
+        tmpl_xlsm = ChecklistTemplate.objects.get(name="WMS XLSM")
+        self.assertRedirects(resp_xlsm, f"/manage/checklists/{tmpl_xlsm.pk}/preview/")
+        self.assertEqual(tmpl_xlsm.items.count(), 14)
+
 
 class InverterStringSummaryTests(TestCase):
     def setUp(self):

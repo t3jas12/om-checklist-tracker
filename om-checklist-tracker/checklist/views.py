@@ -868,14 +868,14 @@ def manage_checklists(request):
             upload_file = form.cleaned_data["file"]
             file_name = upload_file.name.lower()
             try:
-                if file_name.endswith(".xlsx") or file_name.endswith(".xls"):
+                if file_name.endswith((".xlsx", ".xls", ".xlx", ".xlsm", ".xlsb", ".xltx", ".xltm", ".ods")):
                     template, count = import_uploaded_excel(upload_file, template_name)
-                elif file_name.endswith(".csv"):
+                elif file_name.endswith((".csv", ".tsv")):
                     template, count = import_uploaded_csv(upload_file, template_name)
                 elif file_name.endswith(".pdf"):
                     template, count = import_uploaded_pdf(upload_file, template_name)
                 else:
-                    messages.error(request, "Unsupported file format. Please upload .xlsx, .csv, or .pdf.")
+                    messages.error(request, "Unsupported file format. Please upload .xlsx, .xls, .xlx, .csv, or .pdf.")
                     return redirect("manage-checklists")
 
                 # If sites were selected, assign the new template to them
@@ -895,6 +895,10 @@ def manage_checklists(request):
             except Exception as e:
                 messages.error(request, f"Error processing file: {e}")
                 return redirect("manage-checklists")
+        else:
+            for field_errors in form.errors.values():
+                for err in field_errors:
+                    messages.error(request, err)
     else:
         form = ChecklistUploadForm()
 

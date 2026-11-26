@@ -28,9 +28,14 @@ class EquipmentForm(forms.ModelForm):
         labels = {"name": "Equipment name"}
 
 
+_ACCEPTED_UPLOAD_EXTS = (
+    ".xlsx", ".xls", ".xlx", ".xlsm", ".xlsb", ".xltx", ".xltm", ".ods", ".csv", ".tsv", ".pdf",
+)
+
+
 class ChecklistUploadForm(forms.Form):
     template_name = forms.CharField(max_length=160, label="Checklist name", widget=forms.TextInput(attrs={"placeholder": "e.g. 11 KV Equipment Control Panel"}))
-    file = forms.FileField(label="Checklist file (Excel .xlsx, CSV .csv, or PDF)")
+    file = forms.FileField(label="Checklist file (Excel .xlsx / .xls / .xlx, CSV, or PDF)")
     assign_to_sites = forms.ModelMultipleChoiceField(
         queryset=Site.objects.filter(active=True).order_by("name"),
         required=False,
@@ -41,8 +46,8 @@ class ChecklistUploadForm(forms.Form):
     def clean_file(self):
         f = self.cleaned_data["file"]
         name = f.name.lower()
-        if not (name.endswith(".xlsx") or name.endswith(".xls") or name.endswith(".csv") or name.endswith(".pdf")):
-            raise forms.ValidationError("Only .xlsx, .xls, .csv, or .pdf files are accepted.")
+        if not name.endswith(_ACCEPTED_UPLOAD_EXTS):
+            raise forms.ValidationError("Accepted formats: .xlsx, .xls, .xlx, .xlsm, .xlsb, .ods, .csv, .tsv, or .pdf.")
         return f
 
 

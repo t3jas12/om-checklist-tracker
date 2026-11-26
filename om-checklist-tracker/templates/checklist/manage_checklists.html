@@ -5,7 +5,7 @@
   <div>
     <div class="eyebrow">ADMINISTRATION</div>
     <h1>Checklist templates</h1>
-    <p>Upload new checklists in Excel (.xlsx), CSV (.csv), or PDF format and assign them to sites for daily operator entry.</p>
+    <p>Upload new checklists in Excel (.xlsx, .xls, .xlx, .xlsm), CSV, or PDF format and assign them to sites for daily operator entry.</p>
   </div>
 </div>
 
@@ -91,7 +91,7 @@
         <small class="field-error">{{ error }}</small>
       {% endfor %}
 
-      <label for="{{ form.file.id_for_label }}" style="margin-top: 1rem;">Checklist file (Excel .xlsx, CSV .csv, or PDF)</label>
+      <label for="{{ form.file.id_for_label }}" style="margin-top: 1rem;">Checklist file (Excel .xlsx / .xls / .xlx, CSV, or PDF)</label>
       {{ form.file }}
       {% for error in form.file.errors %}
         <small class="field-error">{{ error }}</small>
