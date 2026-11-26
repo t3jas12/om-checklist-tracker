@@ -787,22 +787,12 @@ def edit_site(request, site_id):
     equipment_form = EquipmentForm()
     checklist_assign_form = SiteChecklistAssignForm(site=site)
     site_checklists = site.checklists.select_related("template").order_by("position", "template__name")
-    site_submissions = list(
-        Submission.objects.filter(site=site)
-        .select_related("site", "template", "submitted_by")
-        .prefetch_related("answers__item")
-        .order_by("-checklist_date")
-    )
-    site_executive = build_executive_summary(site_submissions, sites=[site])[0]
     return render(request, "checklist/edit_site.html", {
         "site": site,
         "form": form,
         "equipment_form": equipment_form,
         "checklist_assign_form": checklist_assign_form,
         "site_checklists": site_checklists,
-        "site_executive": site_executive,
-        "site_executive_list": [site_executive],
-        "current_month_str": timezone.localdate().strftime("%Y-%m"),
     })
 
 

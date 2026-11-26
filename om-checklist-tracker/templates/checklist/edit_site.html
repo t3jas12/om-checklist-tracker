@@ -96,15 +96,4 @@
     </div>
   </section>
 </div>
-
-<section class="panel" style="margin-top: 1.5rem; border: {% if site_executive.total_non_operational > 0 %}1.5px solid #ef4444{% else %}1px solid var(--line){% endif %};">
-  <div class="panel-head" style="border-bottom: 1px solid var(--line); margin-bottom: 1rem;">
-    <div>
-      <h2 style="color: {% if site_executive.total_non_operational > 0 %}#991b1b{% else %}var(--ink){% endif %};">Executive Summary — Daily Non-Operational Assets ({{ site.name }})</h2>
-      <p>Every recorded day for this site with non-operational assets highlighted in red</p>
-    </div>
-    <a class="text-link" href="{% url 'executive-summary' %}?site={{ site.id }}&all_days=1">Open in Executive Summary →</a>
-  </div>
-  {% include 'checklist/_executive_site_cards.html' with executive_list=site_executive_list %}
-</section>
 {% endblock %}

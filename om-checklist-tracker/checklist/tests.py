@@ -813,8 +813,20 @@ Legends:,,,Signature,check & done by,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
             p = Path(tmp)
             src = p / "wms.xlsx"
             src.write_bytes(xlsx_bytes)
+            lo_profile = p / "lo_profile"
+            lo_profile.mkdir()
             subprocess.run(
-                ["soffice", "--headless", "--norestore", "--convert-to", "xls", "--outdir", str(p), str(src)],
+                [
+                    "soffice",
+                    f"-env:UserInstallation=file://{lo_profile}",
+                    "--headless",
+                    "--norestore",
+                    "--convert-to",
+                    "xls",
+                    "--outdir",
+                    str(p),
+                    str(src),
+                ],
                 check=True,
                 capture_output=True,
                 timeout=30,
@@ -962,12 +974,10 @@ class InverterStringSummaryTests(TestCase):
         self.assertEqual(anon_resp.status_code, 302)
         self.client.force_login(self.admin)
 
-        # 4. Edit site page includes per-site Executive Summary
+        # 4. Edit site page does NOT render Executive Summary (only the Executive Summary tab shows it)
         site_resp = self.client.get(f"/manage/sites/{self.site.pk}/edit/")
         self.assertEqual(site_resp.status_code, 200)
-        self.assertContains(site_resp, "Executive Summary — Daily Non-Operational Assets (dhansa)")
-        self.assertContains(site_resp, "PV3")
-        self.assertContains(site_resp, "PV6")
+        self.assertNotContains(site_resp, "Executive Summary — Daily Non-Operational Assets")
 
 
 
