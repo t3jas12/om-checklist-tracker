@@ -67,12 +67,21 @@ def short_item_label(item):
     return desc or f"#{item.checkpoint_no}"
 
 
+def supports_choice_summary(template):
+    """Return True only for Inverter checklists (Operational / Non-Operational / Spare summaries)."""
+    if not template:
+        return False
+    resolver = getattr(template, "resolved_category", None)
+    return resolver() == "Inverters" if callable(resolver) else False
+
+
 def summarize_submission_choices(submission, answers=None):
     """
-    Compute dynamic per-option counts for any submission whose template has
-    dropdown 'choices' items (such as inverter string monitoring checklists).
+    Compute dynamic per-option counts for Inverter checklists with dropdown
+    'choices' items (Operational / Non-Operational / Spare).
 
-    Returns None if the submission has no 'choices' items; otherwise returns a dict:
+    Returns None if the template is not an Inverter checklist or has no
+    'choices' items; otherwise returns a dict:
       {
         "total_items": int,
         "option_counts": [{"label": str, "count": int, "kind": str, "items": list[str]}, ...],
@@ -82,6 +91,8 @@ def summarize_submission_choices(submission, answers=None):
         "non_operational_labels": list[str],
       }
     """
+    if not supports_choice_summary(getattr(submission, "template", None)):
+        return None
     if answers is None:
         answers = list(submission.answers.select_related("item").order_by("item__position", "item__checkpoint_no"))
 

@@ -41,7 +41,7 @@
               <a href="{% url 'preview-checklist-template' template.id %}" style="color: var(--ink); text-decoration: none;">
                 <strong>{{ template.name }}</strong>
               </a>
-              <small>Version {{ template.version }}{% if template.document_number %} · Doc: {{ template.document_number }}{% endif %}</small>
+              <small><span class="site-tag">{{ template.resolved_category }}</span> · Version {{ template.version }}{% if template.document_number %} · Doc: {{ template.document_number }}{% endif %}</small>
             </td>
             <td>
               <span class="badge">{{ template.items.count }} checks</span>
@@ -90,6 +90,9 @@
       {% for error in form.template_name.errors %}
         <small class="field-error">{{ error }}</small>
       {% endfor %}
+
+      <label for="{{ form.category.id_for_label }}" style="margin-top: 0.75rem;">{{ form.category.label }}</label>
+      {{ form.category }}
 
       <label for="{{ form.file.id_for_label }}" style="margin-top: 1rem;">Checklist file (Excel .xlsx / .xls / .xlx, CSV, or PDF)</label>
       {{ form.file }}

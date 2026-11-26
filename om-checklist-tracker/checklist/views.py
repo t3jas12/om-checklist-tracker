@@ -21,6 +21,8 @@ from .forms import (
     UserProvisionForm,
 )
 from .models import (
+    CATEGORY_CHOICES,
+    CATEGORY_ORDER,
     Answer,
     ChecklistItem,
     ChecklistTemplate,
@@ -30,6 +32,7 @@ from .models import (
     SiteEquipment,
     Submission,
     UserSite,
+    resolve_equipment_label,
 )
 from .services.exports import excel_response, pdf_response, range_excel_response, range_pdf_response
 from .services.summary import build_executive_summary, summarize_submission_choices
@@ -81,6 +84,51 @@ def _collect_checklist_values(request, items):
 
 def _preview_rows(items, values):
     return [{"item": item, **values.get(str(item.id), {"value": "", "comment": ""})} for item in items]
+
+
+def _group_checklist_items(checklist_status_list):
+    """Group site checklist options into ordered category sections."""
+    groups = {}
+    for item in checklist_status_list:
+        cat = item.get("category") or item["template"].resolved_category()
+        groups.setdefault(cat, []).append(item)
+
+    ordered = []
+    for cat in sorted(groups.keys(), key=lambda c: (CATEGORY_ORDER.get(c, 99), c.lower())):
+        items = groups[cat]
+        submitted_count = sum(1 for it in items if it.get("submission") is not None)
+        available_count = sum(1 for it in items if it.get("available"))
+        non_op_count = sum(
+            it["choice_summary"]["non_operational_count"]
+            for it in items
+            if it.get("choice_summary")
+        )
+        ordered.append({
+            "category": cat,
+            "items": items,
+            "total": len(items),
+            "submitted_count": submitted_count,
+            "available_count": available_count,
+            "all_done": bool(items) and submitted_count == len(items),
+            "non_op_count": non_op_count,
+        })
+    return ordered
+
+
+def _site_category_map(site=None):
+    qs = SiteChecklist.objects.select_related("template")
+    if site is not None:
+        qs = qs.filter(site=site)
+    return {(sc.site_id, sc.template_id): sc.resolved_category() for sc in qs}
+
+
+def _filter_submissions_by_category(submissions, category, site_cat_map):
+    if not category:
+        return submissions
+    return [
+        sub for sub in submissions
+        if site_cat_map.get((sub.site_id, sub.template_id), sub.template.resolved_category()) == category
+    ]
 
 
 def _parse_filter_dates(request, default_start, default_end):
@@ -168,20 +216,36 @@ def dashboard(request):
             s.choice_summary = summarize_submission_choices(s, list(s.answers.all()))
             site_submissions.setdefault(s.site_id, []).append(s)
 
+        site_cat_map = _site_category_map()
         rows = []
         for site in all_sites:
             assigned_checklists = list(site.checklists.filter(active=True).select_related("template").order_by("position"))
             subs = site_submissions.get(site.id, [])
+            submitted_template_ids = {s.template_id for s in subs}
             total_req = len(assigned_checklists) if assigned_checklists else 1
             completed_count = len(subs)
             is_complete = completed_count >= total_req if assigned_checklists else (completed_count > 0)
             choice_subs = [s for s in subs if s.choice_summary]
             non_op_today = sum(s.choice_summary["non_operational_count"] for s in choice_subs)
+
+            group_counts = {}
+            for sc in assigned_checklists:
+                cat = sc.resolved_category()
+                grp = group_counts.setdefault(cat, {"category": cat, "total": 0, "submitted": 0})
+                grp["total"] += 1
+                if sc.template_id in submitted_template_ids:
+                    grp["submitted"] += 1
+            group_progress = [
+                group_counts[c]
+                for c in sorted(group_counts.keys(), key=lambda k: (CATEGORY_ORDER.get(k, 99), k.lower()))
+            ]
+
             rows.append({
                 "site": site,
                 "submissions": subs,
                 "first_submission": subs[0] if subs else None,
                 "assigned_checklists": assigned_checklists,
+                "group_progress": group_progress,
                 "completed_count": completed_count,
                 "total_required": total_req,
                 "is_complete": is_complete,
@@ -192,6 +256,7 @@ def dashboard(request):
         # Inline review tab data
         review_site_id = request.GET.get("site", "")
         review_template_id = request.GET.get("template", "")
+        review_category = request.GET.get("category", "").strip()
         month_start = today.replace(day=1)
         month_end = today.replace(day=calendar.monthrange(today.year, today.month)[1])
         start_date, end_date = _parse_filter_dates(request, today, today)
@@ -202,16 +267,18 @@ def dashboard(request):
         if review_template_id:
             review_qs = review_qs.filter(template_id=review_template_id)
 
-        review_submissions = list(review_qs)
+        review_submissions = _filter_submissions_by_category(list(review_qs), review_category, site_cat_map)
         string_summary_subs = []
         total_non_operational = 0
         for sub in review_submissions:
+            sub.category = site_cat_map.get((sub.site_id, sub.template_id), sub.template.resolved_category())
             sub.choice_summary = summarize_submission_choices(sub, list(sub.answers.all()))
             if sub.choice_summary:
                 string_summary_subs.append(sub)
                 total_non_operational += sub.choice_summary["non_operational_count"]
 
         all_templates = ChecklistTemplate.objects.filter(active=True).order_by("name", "-version")
+        all_categories = [c[0] for c in CATEGORY_CHOICES]
 
         return render(request, "checklist/admin_dashboard.html", {
             "rows": rows,
@@ -220,8 +287,10 @@ def dashboard(request):
             "active_tab": active_tab,
             "all_sites": all_sites,
             "all_templates": all_templates,
+            "all_categories": all_categories,
             "review_site_id": review_site_id,
             "review_template_id": review_template_id,
+            "review_category": review_category,
             "start_date": start_date,
             "end_date": end_date,
             "month_start": month_start,
@@ -240,6 +309,7 @@ def dashboard(request):
     for item in checklist_status_list:
         sub = item.get("submission")
         item["choice_summary"] = summarize_submission_choices(sub) if sub else None
+    grouped_checklists = _group_checklist_items(checklist_status_list)
     eligible_templates = [item["template"] for item in checklist_status_list if item["available"]]
     next_template = eligible_templates[0] if eligible_templates else None
     all_done = bool(checklist_status_list) and all(item["submission"] is not None for item in checklist_status_list)
@@ -250,6 +320,7 @@ def dashboard(request):
         "site": site,
         "submission": first_submission,
         "checklist_status_list": checklist_status_list,
+        "grouped_checklists": grouped_checklists,
         "next_template": next_template,
         "eligible_count": len(eligible_templates),
         "all_done": all_done,
@@ -261,32 +332,32 @@ def dashboard(request):
 
 
 def _checklist_options_for_site(site, today):
-    """Return each active checklist with today's submission and sequence eligibility."""
+    """Return each active checklist with today's submission, category, and sequence eligibility."""
     assigned = list(
         site.checklists.filter(active=True, template__active=True)
         .select_related("template")
         .order_by("position", "template__name", "template_id")
     )
-    assignments = [(sc.template, sc.position) for sc in assigned]
+    assignments = [(sc.template, sc.position, sc.resolved_category()) for sc in assigned]
     if not assignments:
         fallback = ChecklistTemplate.objects.filter(active=True).order_by("-version").first()
         if fallback:
-            assignments = [(fallback, None)]
+            assignments = [(fallback, None, fallback.resolved_category())]
 
     submissions = {
         submission.template_id: submission
         for submission in Submission.objects.filter(
             site=site,
             checklist_date=today,
-            template_id__in=[template.pk for template, _ in assignments],
+            template_id__in=[template.pk for template, _, _ in assignments],
         )
     }
     pending_unsequenced = {
-        template.pk for template, position in assignments
+        template.pk for template, position, _ in assignments
         if position in (0, None) and template.pk not in submissions
     }
     first_pending_sequenced = next((
-        template.pk for template, position in assignments
+        template.pk for template, position, _ in assignments
         if position and template.pk not in submissions
     ), None)
     eligible_ids = pending_unsequenced
@@ -297,10 +368,11 @@ def _checklist_options_for_site(site, today):
         {
             "template": template,
             "position": position,
+            "category": category,
             "submission": submissions.get(template.pk),
             "available": template.pk in eligible_ids,
         }
-        for template, position in assignments
+        for template, position, category in assignments
     ]
 
 
@@ -379,6 +451,7 @@ def checklist_form(request):
     ctx = {
         "site": site, "template": template, "template_id": template.pk, "items": items, "today": today,
         "deadline": GlobalSettings.get_solo().deadline,
+        "equipment_label": resolve_equipment_label(site, template),
         "checklist_progress": checklist_progress, "current_index": current_index,
         "total_checklists": len(all_templates),
     }
@@ -458,6 +531,7 @@ def finalize_checklist(request):
     ctx = {
         "site": site, "template": template, "template_id": template.pk, "items": items, "today": today,
         "remarks": remarks, "deadline": GlobalSettings.get_solo().deadline,
+        "equipment_label": resolve_equipment_label(site, template),
         "rows": _preview_rows(items, values),
         "checklist_progress": checklist_progress, "current_index": current_index,
         "total_checklists": len(all_templates),
@@ -486,7 +560,7 @@ def finalize_checklist(request):
             submission = Submission.objects.create(
                 site=locked_site, template=template, submitted_by=request.user, checklist_date=today,
                 remarks=remarks, signer_name=(request.user.get_full_name() or request.user.username),
-                equipment_snapshot=", ".join(site.equipment.values_list("name", flat=True)),
+                equipment_snapshot=resolve_equipment_label(locked_site, template),
             )
             Answer.objects.bulk_create([
                 Answer(submission=submission, item=item, value=values[str(item.id)]["value"], comment=values[str(item.id)].get("comment", ""))
@@ -518,6 +592,7 @@ def submission_review(request, submission_id):
         "submission": submission,
         "answers": answers,
         "choice_summary": choice_summary,
+        "equipment_label": resolve_equipment_label(submission.site, submission.template) or submission.equipment_snapshot,
     })
 
 
@@ -568,6 +643,7 @@ def _run_monthly_export(request, file_type, *, site=None, fallback_redirect="his
 
     start_date, end_date = _resolve_export_date_range(request)
     template_id = request.GET.get("template", "").strip()
+    category = request.GET.get("category", "").strip()
 
     qs = (
         Submission.objects.filter(checklist_date__range=[start_date, end_date])
@@ -580,7 +656,7 @@ def _run_monthly_export(request, file_type, *, site=None, fallback_redirect="his
     if template_id:
         qs = qs.filter(template_id=template_id)
 
-    submissions = list(qs)
+    submissions = _filter_submissions_by_category(list(qs), category, _site_category_map(site))
     if not submissions:
         messages.warning(
             request,
@@ -599,6 +675,7 @@ def history(request):
     selected_month = request.GET.get("month", "").strip()
     selected_template = request.GET.get("template", "").strip()
     selected_site = request.GET.get("site", "").strip()
+    selected_category = request.GET.get("category", "").strip()
 
     if is_admin(request.user):
         submissions = Submission.objects.select_related("site", "template", "submitted_by").prefetch_related("answers__item").order_by("-checklist_date", "site__name")
@@ -628,17 +705,21 @@ def history(request):
         except ValueError:
             selected_month = ""
 
-    submissions_list = list(submissions)
+    site_cat_map = _site_category_map(operator_site)
+    submissions_list = _filter_submissions_by_category(list(submissions), selected_category, site_cat_map)
     for sub in submissions_list:
+        sub.category = site_cat_map.get((sub.site_id, sub.template_id), sub.template.resolved_category())
         sub.choice_summary = summarize_submission_choices(sub, list(sub.answers.all()))
 
     return render(request, "checklist/history.html", {
         "submissions": submissions_list,
         "sites": sites,
         "templates": templates,
+        "all_categories": [c[0] for c in CATEGORY_CHOICES],
         "operator_site": operator_site,
         "selected_site": selected_site,
         "selected_template": selected_template,
+        "selected_category": selected_category,
         "selected_month": selected_month,
         "export_month": selected_month or today.strftime("%Y-%m"),
     })
@@ -786,13 +867,23 @@ def edit_site(request, site_id):
         form = SiteForm(instance=site)
     equipment_form = EquipmentForm()
     checklist_assign_form = SiteChecklistAssignForm(site=site)
-    site_checklists = site.checklists.select_related("template").order_by("position", "template__name")
+    site_checklists = list(site.checklists.select_related("template").order_by("position", "template__name"))
+    grouped_map = {}
+    for sc in site_checklists:
+        cat = sc.resolved_category()
+        grouped_map.setdefault(cat, []).append(sc)
+    grouped_site_checklists = [
+        {"category": cat, "items": grouped_map[cat]}
+        for cat in sorted(grouped_map.keys(), key=lambda c: (CATEGORY_ORDER.get(c, 99), c.lower()))
+    ]
     return render(request, "checklist/edit_site.html", {
         "site": site,
         "form": form,
         "equipment_form": equipment_form,
         "checklist_assign_form": checklist_assign_form,
         "site_checklists": site_checklists,
+        "grouped_site_checklists": grouped_site_checklists,
+        "category_choices": CATEGORY_CHOICES,
     })
 
 
@@ -848,6 +939,19 @@ def assign_site_checklist(request, site_id):
 
 @login_required
 @user_passes_test(is_admin)
+def update_site_checklist_category(request, site_id, site_checklist_id):
+    if request.method != "POST":
+        return HttpResponseForbidden("Checklist changes must be submitted.")
+    sc = get_object_or_404(SiteChecklist, pk=site_checklist_id, site_id=site_id)
+    new_cat = request.POST.get("category", "").strip()[:60]
+    sc.category = new_cat
+    sc.save(update_fields=["category"])
+    messages.success(request, f"Updated group for '{sc.template.name}' to '{sc.resolved_category()}'.")
+    return redirect("edit-site", site_id=site_id)
+
+
+@login_required
+@user_passes_test(is_admin)
 def remove_site_checklist(request, site_id, site_checklist_id):
     if request.method != "POST":
         return HttpResponseForbidden("Checklist changes must be submitted.")
@@ -877,6 +981,12 @@ def manage_checklists(request):
                 else:
                     messages.error(request, "Unsupported file format. Please upload .xlsx, .xls, .xlx, .csv, or .pdf.")
                     return redirect("manage-checklists")
+
+                # Apply explicit category if provided (otherwise importer auto-inferred it)
+                chosen_category = form.cleaned_data.get("category", "").strip()
+                if chosen_category:
+                    template.category = chosen_category
+                    template.save(update_fields=["category"])
 
                 # If sites were selected, assign the new template to them
                 sites_to_assign = form.cleaned_data.get("assign_to_sites")

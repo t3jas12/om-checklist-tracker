@@ -30,19 +30,36 @@
       <p>Sequence 0 checklists are available in any order. For a checklist sequence, assign positive numbers; operators can fill the lowest outstanding number first. Unsequenced checklists remain available alongside the next sequenced checklist.</p>
 
       <div class="equipment-list" style="margin-bottom: 1.5rem;">
-        {% for sc in site_checklists %}
-          <div class="equipment-row">
-            <div>
-              <strong>{% if sc.position == 0 %}Any order{% else %}Sequence #{{ sc.position }}{% endif %} · {{ sc.template.name }}</strong>
-              <small>{{ sc.template.items.count }} checks · {% if sc.active %}Active{% else %}Inactive{% endif %}</small>
+        {% for group in grouped_site_checklists %}
+          <div style="margin-bottom: 1rem; border: 1px solid var(--line); border-radius: 8px; overflow: hidden;">
+            <div style="padding: 0.5rem 0.75rem; background: #f4f7f5; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center;">
+              <strong style="font-size: 12px; color: var(--ink);">{{ group.category }}</strong>
+              <span class="badge">{{ group.items|length }}</span>
             </div>
-            <div style="display: flex; gap: 0.75rem; align-items: center;">
-              <a href="{% url 'preview-checklist-template' sc.template.id %}" class="button secondary small" style="padding: 3px 8px; font-size: 11px;">Preview</a>
-              <form method="post" action="{% url 'remove-site-checklist' site.id sc.id %}" onsubmit="return confirm('Remove {{ sc.template.name|escapejs }} from this site?')">
-                {% csrf_token %}
-                <button class="link-button danger-link" type="submit">Remove</button>
-              </form>
-            </div>
+            {% for sc in group.items %}
+              <div class="equipment-row" style="padding: 0.65rem 0.75rem;">
+                <div>
+                  <strong>{% if sc.position == 0 %}Any order{% else %}Sequence #{{ sc.position }}{% endif %} · {{ sc.template.name }}</strong>
+                  <small>{{ sc.template.items.count }} checks · {% if sc.active %}Active{% else %}Inactive{% endif %}</small>
+                </div>
+                <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                  <form method="post" action="{% url 'update-site-checklist-category' site.id sc.id %}" style="display: inline-flex; gap: 0.25rem; align-items: center; margin: 0;">
+                    {% csrf_token %}
+                    <select name="category" onchange="this.form.submit()" style="font-size: 11px; padding: 3px 6px; border: 1px solid #cbd5d1; border-radius: 5px; width: auto;">
+                      <option value="" {% if not sc.category %}selected{% endif %}>Auto ({{ sc.template.resolved_category }})</option>
+                      {% for val, label in category_choices %}
+                        <option value="{{ val }}" {% if sc.category == val %}selected{% endif %}>{{ label }}</option>
+                      {% endfor %}
+                    </select>
+                  </form>
+                  <a href="{% url 'preview-checklist-template' sc.template.id %}" class="button secondary small" style="padding: 3px 8px; font-size: 11px;">Preview</a>
+                  <form method="post" action="{% url 'remove-site-checklist' site.id sc.id %}" onsubmit="return confirm('Remove {{ sc.template.name|escapejs }} from this site?')">
+                    {% csrf_token %}
+                    <button class="link-button danger-link" type="submit">Remove</button>
+                  </form>
+                </div>
+              </div>
+            {% endfor %}
           </div>
         {% empty %}
           <p class="muted small">No specific checklists assigned. This site will use the default active checklist template.</p>
@@ -54,6 +71,9 @@
         {% csrf_token %}
         <label for="{{ checklist_assign_form.template.id_for_label }}">Select template</label>
         {{ checklist_assign_form.template }}
+
+        <label for="{{ checklist_assign_form.category.id_for_label }}" style="margin-top: 0.75rem;">{{ checklist_assign_form.category.label }}</label>
+        {{ checklist_assign_form.category }}
 
         <div style="display: flex; gap: 1rem; align-items: flex-end; margin-top: 0.75rem;">
           <div style="flex: 1;">

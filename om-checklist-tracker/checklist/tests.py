@@ -758,19 +758,36 @@ Legends:,,,Signature,check & done by,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
         sub = Submission.objects.get(site=self.site, template=tmpl)
         self.assertRedirects(lockin_resp, f"/submissions/{sub.pk}/review/")
 
+        # Operator & Admin UI must NOT display choice summary pill badges for WMS/SCADA checklists
+        op_dash = self.client.get("/")
+        self.assertEqual(op_dash.status_code, 200)
+        self.assertNotContains(op_dash, "Done: 1")
+        op_review = self.client.get(f"/submissions/{sub.pk}/review/")
+        self.assertEqual(op_review.status_code, 200)
+        self.assertNotContains(op_review, "Status Summary")
+        op_hist = self.client.get("/history/")
+        self.assertEqual(op_hist.status_code, 200)
+        self.assertNotContains(op_hist, "Non-Op / 14")
+
         # Daily Excel + PDF exports
         self.client.force_login(self.admin)
+        admin_review = self.client.get(f"/?tab=review&site={self.site.pk}&template={tmpl.pk}")
+        self.assertEqual(admin_review.status_code, 200)
+        self.assertNotContains(admin_review, "Inverter / String Status Summary")
+        self.assertNotContains(admin_review, "Done: 1")
         daily_xlsx = self.client.get(f"/admin/submissions/{sub.pk}/xlsx/")
         self.assertEqual(daily_xlsx.status_code, 200)
         dwb = load_workbook(BytesIO(daily_xlsx.content), data_only=False)
         dws = dwb["WMS Checklist Excel"]
         self.assertGreaterEqual(len(dws.data_validations.dataValidation), 14)
+        daily_text = " | ".join(str(v) for row in dws.iter_rows(values_only=True) for v in row if v is not None)
+        self.assertNotIn("Status Summary:", daily_text)
 
         daily_pdf = self.client.get(f"/admin/submissions/{sub.pk}/pdf/")
         self.assertEqual(daily_pdf.status_code, 200)
         self.assertTrue(daily_pdf.content.startswith(b"%PDF"))
 
-        # Monthly Excel + PDF exports
+        # Monthly Excel + PDF exports (no "<Option> Count" rows appended for WMS & SCADA)
         month_str = sub.checklist_date.strftime("%Y-%m")
         monthly_xlsx = self.client.get(f"/admin/export/monthly/xlsx/?site={self.site.pk}&month={month_str}")
         self.assertEqual(monthly_xlsx.status_code, 200)
@@ -781,6 +798,8 @@ Legends:,,,Signature,check & done by,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
         self.assertEqual(mws.cell(9, day_col).value, "Done")
         self.assertEqual(mws.cell(14, day_col).value, "Operational")
         self.assertGreaterEqual(len(mws.data_validations.dataValidation), 14)
+        wms_all_cells = [str(v) for row in mws.iter_rows(values_only=True) for v in row if v is not None]
+        self.assertFalse(any(val.endswith(" Count") for val in wms_all_cells))
 
         monthly_pdf = self.client.get(f"/admin/export/monthly/pdf/?site={self.site.pk}&month={month_str}")
         self.assertEqual(monthly_pdf.status_code, 200)
@@ -933,6 +952,12 @@ class InverterStringSummaryTests(TestCase):
         self.assertEqual(ws.cell(13, day_col).value, 2)
         self.assertEqual(ws.cell(14, 3).value, "Spare Count")
         self.assertEqual(ws.cell(14, day_col).value, 2)
+        # Verify crisp borders, title banner, and landscape print setup
+        self.assertIn("O&M MONTHLY CHECKLIST", ws.cell(1, 1).value)
+        self.assertEqual(ws.cell(1, 1).border.top.style, "medium")
+        self.assertEqual(ws.cell(6, day_col).border.left.style, "thin")
+        self.assertEqual(ws.cell(12, 1).border.top.style, "medium")
+        self.assertEqual(ws.page_setup.fitToWidth, 1)
 
     def test_executive_summary_shows_per_site_daily_non_operational_assets_in_red(self):
         other_site = Site.objects.create(name="Jhatikara")
@@ -997,6 +1022,136 @@ class InverterStringSummaryTests(TestCase):
         site_resp = self.client.get(f"/manage/sites/{self.site.pk}/edit/")
         self.assertEqual(site_resp.status_code, 200)
         self.assertNotContains(site_resp, "Executive Summary — Daily Non-Operational Assets")
+
+
+class ChecklistGroupingTests(TestCase):
+    def setUp(self):
+        self.site = Site.objects.create(name="Dhansa Group Site")
+        self.admin = User.objects.create_superuser(username="admin", password="strong-admin-password")
+        self.operator = User.objects.create_user(username="op_grp", password="secure-test-password")
+        UserSite.objects.create(user=self.operator, site=self.site)
+        settings = GlobalSettings.get_solo()
+        settings.deadline = time(23, 59)
+        settings.save()
+
+        self.inv1 = ChecklistTemplate.objects.create(name="inv1", version=1)
+        self.inv3 = ChecklistTemplate.objects.create(name="inv3", version=1)
+        self.trafo = ChecklistTemplate.objects.create(name="Trafo Daily Checklist", version=1)
+        self.wms = ChecklistTemplate.objects.create(name="wms, scada and cctv", version=1)
+        self.panel = ChecklistTemplate.objects.create(name="11kv equipment control panel", version=1)
+
+        for tmpl in (self.inv1, self.inv3, self.trafo, self.wms, self.panel):
+            ChecklistItem.objects.create(template=tmpl, checkpoint_no=1, description="Check", answer_type="boolean", position=1)
+            SiteChecklist.objects.create(site=self.site, template=tmpl, position=0)
+
+    def test_auto_inferred_categories_and_operator_grouped_dashboard(self):
+        self.assertEqual(self.inv1.resolved_category(), "Inverters")
+        self.assertEqual(self.inv3.resolved_category(), "Inverters")
+        self.assertEqual(self.trafo.resolved_category(), "Transformers")
+        self.assertEqual(self.wms.resolved_category(), "WMS & SCADA")
+        self.assertEqual(self.panel.resolved_category(), "HT / LT Panels")
+
+        self.client.force_login(self.operator)
+        resp = self.client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        groups = [g["category"] for g in resp.context["grouped_checklists"]]
+        self.assertEqual(groups, ["Inverters", "Transformers", "WMS & SCADA", "HT / LT Panels"])
+        self.assertContains(resp, "0 / 2 submitted")
+        self.assertContains(resp, "0 / 1 submitted")
+
+    def test_admin_can_override_group_per_site_and_export_monthly_by_group(self):
+        sc_panel = SiteChecklist.objects.get(site=self.site, template=self.panel)
+        self.client.force_login(self.admin)
+        upd = self.client.post(f"/manage/sites/{self.site.pk}/checklists/{sc_panel.pk}/category/", {"category": "Transformers"})
+        self.assertRedirects(upd, f"/manage/sites/{self.site.pk}/edit/")
+        sc_panel.refresh_from_db()
+        self.assertEqual(sc_panel.resolved_category(), "Transformers")
+
+        # Create submissions for inv1, inv3, and trafo on same day, then export only "Inverters"
+        today = timezone.localdate()
+        for tmpl in (self.inv1, self.inv3, self.trafo):
+            sub = Submission.objects.create(site=self.site, template=tmpl, submitted_by=self.operator, checklist_date=today)
+            Answer.objects.create(submission=sub, item=tmpl.items.first(), value="YES")
+
+        month_str = today.strftime("%Y-%m")
+        xlsx_resp = self.client.get(f"/admin/export/monthly/xlsx/?site={self.site.pk}&category=Inverters&month={month_str}")
+        self.assertEqual(xlsx_resp.status_code, 200)
+        wb = load_workbook(BytesIO(xlsx_resp.content), data_only=True)
+        self.assertIn("inv1", wb.sheetnames)
+        self.assertIn("inv3", wb.sheetnames)
+        self.assertNotIn("Trafo Daily Checklist", wb.sheetnames)
+
+        # Admin Today's status displays group progress tags
+        dash_resp = self.client.get("/")
+        self.assertContains(dash_resp, "Inverters: 2/2")
+        self.assertContains(dash_resp, "Transformers: 1/2")
+
+    def test_exports_isolate_equipment_name_per_checklist_sheet(self):
+        from .services.exports import excel_response
+
+        SiteEquipment.objects.create(site=self.site, name="11kv ht panel")
+        SiteEquipment.objects.create(site=self.site, name="5 mva transformer")
+        SiteEquipment.objects.create(site=self.site, name="wms")
+
+        # Simulate templates where inv3 has blank equipment_name while trafo/panel/wms have specific names
+        self.trafo.equipment_name = "5 MVA Transformer - 1"
+        self.trafo.save(update_fields=["equipment_name"])
+        self.inv3.equipment_name = ""
+        self.inv3.save(update_fields=["equipment_name"])
+        self.panel.equipment_name = "11 KV Equipment Control Panel & LT Panel"
+        self.panel.save(update_fields=["equipment_name"])
+        self.wms.equipment_name = "WMS, SCADA & CCTV"
+        self.wms.save(update_fields=["equipment_name"])
+
+        today = timezone.localdate()
+        legacy_snapshot = "11kv ht panel, 5 mva transformer, wms"
+        subs = {}
+        for tmpl in (self.trafo, self.inv3, self.panel, self.wms):
+            sub = Submission.objects.create(
+                site=self.site,
+                template=tmpl,
+                submitted_by=self.operator,
+                checklist_date=today,
+                equipment_snapshot=legacy_snapshot,
+            )
+            Answer.objects.create(submission=sub, item=tmpl.items.first(), value="YES")
+            subs[tmpl.name] = sub
+
+        # Daily Excel export per checklist shows only that checklist's equipment
+        expected = {
+            "Trafo Daily Checklist": ("5 MVA Transformer - 1", ["11kv ht panel", "Inverter 3", "WMS, SCADA & CCTV"]),
+            "inv3": ("Inverter 3", ["5 mva transformer", "11kv ht panel"]),
+            "11kv equipment control panel": ("11 KV Equipment Control Panel & LT Panel", ["5 mva transformer", "WMS, SCADA & CCTV"]),
+            "wms, scada and cctv": ("WMS, SCADA & CCTV", ["5 mva transformer", "11kv ht panel"]),
+        }
+        for name, (must_have, must_exclude) in expected.items():
+            daily_resp = excel_response(subs[name])
+            wb_daily = load_workbook(BytesIO(daily_resp.content), data_only=True)
+            ws_daily = wb_daily.active
+            sheet_text = " | ".join(
+                str(v) for row in ws_daily.iter_rows(values_only=True) for v in row if v is not None
+            )
+            self.assertIn(must_have, sheet_text)
+            for excluded in must_exclude:
+                self.assertNotIn(excluded, sheet_text)
+
+        # Monthly multi-sheet Excel workbook keeps each sheet's equipment isolated
+        self.client.force_login(self.admin)
+        month_str = today.strftime("%Y-%m")
+        monthly_resp = self.client.get(f"/admin/export/monthly/xlsx/?site={self.site.pk}&month={month_str}")
+        self.assertEqual(monthly_resp.status_code, 200)
+        wb_monthly = load_workbook(BytesIO(monthly_resp.content), data_only=True)
+        for name, (must_have, must_exclude) in expected.items():
+            sheet_name = name[:31]
+            self.assertIn(sheet_name, wb_monthly.sheetnames)
+            ws = wb_monthly[sheet_name]
+            sheet_text = " | ".join(
+                str(v) for row in ws.iter_rows(values_only=True) for v in row if v is not None
+            )
+            self.assertIn(must_have, sheet_text)
+            for excluded in must_exclude:
+                self.assertNotIn(excluded, sheet_text)
+
 
 
 

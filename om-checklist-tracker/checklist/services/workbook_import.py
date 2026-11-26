@@ -10,7 +10,7 @@ from pathlib import Path
 from django.db import transaction
 from openpyxl import Workbook, load_workbook
 
-from checklist.models import ChecklistItem, ChecklistTemplate, Site, SiteEquipment
+from checklist.models import ChecklistItem, ChecklistTemplate, Site, SiteEquipment, infer_checklist_category, resolve_equipment_label
 
 
 _FREQ_MAP = {
@@ -641,8 +641,14 @@ def _import_workbook_pair(wb_data, wb_val, template_name):
     with transaction.atomic():
         existing = ChecklistTemplate.objects.filter(name=template_name).order_by("-version").first()
         version = (existing.version + 1) if existing else 1
+        resolved_cat = infer_checklist_category(template_name, equipment_name, doc_number)[:60]
+        if not equipment_name:
+            m_inv = re.search(r"\binv(?:erter)?[\s_-]*(\d+)\b", template_name, re.IGNORECASE)
+            if m_inv:
+                equipment_name = f"Inverter {m_inv.group(1)}"
         template = ChecklistTemplate.objects.create(
             name=template_name,
+            category=resolved_cat,
             version=version,
             document_number=doc_number[:120],
             company=company[:200],

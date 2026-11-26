@@ -56,7 +56,16 @@
             {% endfor %}
           </select>
         </div>
-        <div style="flex: 1; min-width: 170px;">
+        <div style="flex: 1; min-width: 150px;">
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Group</label>
+          <select name="category" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid #cbd5d1;">
+            <option value="">All groups</option>
+            {% for cat in all_categories %}
+              <option value="{{ cat }}" {% if review_category == cat %}selected{% endif %}>{{ cat }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div style="flex: 1; min-width: 165px;">
           <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Checklist</label>
           <select name="template" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid #cbd5d1;">
             <option value="">All checklists</option>
@@ -65,11 +74,11 @@
             {% endfor %}
           </select>
         </div>
-        <div style="min-width: 140px;">
+        <div style="min-width: 135px;">
           <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">From date</label>
           <input type="date" name="start_date" value="{{ start_date|date:'Y-m-d' }}" style="width: 100%; padding: 0.45rem; border-radius: 6px; border: 1px solid #cbd5d1;">
         </div>
-        <div style="min-width: 140px;">
+        <div style="min-width: 135px;">
           <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">To date</label>
           <input type="date" name="end_date" value="{{ end_date|date:'Y-m-d' }}" style="width: 100%; padding: 0.45rem; border-radius: 6px; border: 1px solid #cbd5d1;">
         </div>
@@ -77,18 +86,18 @@
           <button class="button primary" style="padding: 0.5rem 1.15rem;" type="submit">Filter review</button>
         </div>
         <div style="display: flex; gap: 0.45rem; flex-wrap: wrap; align-self: flex-end;">
-          <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?tab=review&site={{ review_site_id }}&template={{ review_template_id }}&start_date={{ today|date:'Y-m-d' }}&end_date={{ today|date:'Y-m-d' }}">Today</a>
-          <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?tab=review&site={{ review_site_id }}&template={{ review_template_id }}&month={{ current_month_str }}">This month</a>
-          <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?tab=review&site={{ review_site_id }}&template={{ review_template_id }}&all_days=1">All days</a>
+          <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?tab=review&site={{ review_site_id }}&category={{ review_category|urlencode }}&template={{ review_template_id }}&start_date={{ today|date:'Y-m-d' }}&end_date={{ today|date:'Y-m-d' }}">Today</a>
+          <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?tab=review&site={{ review_site_id }}&category={{ review_category|urlencode }}&template={{ review_template_id }}&month={{ current_month_str }}">This month</a>
+          <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?tab=review&site={{ review_site_id }}&category={{ review_category|urlencode }}&template={{ review_template_id }}&all_days=1">All days</a>
         </div>
       </form>
       <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px dashed #cbd5d1;">
         <span style="font-size: 0.85rem; color: #536b63;">
-          Full-period matrix export (<strong>{{ start_date|date:'d M Y' }}</strong> to <strong>{{ end_date|date:'d M Y' }}</strong> · all days side by side):
+          Full-period matrix export (<strong>{{ start_date|date:'d M Y' }}</strong> to <strong>{{ end_date|date:'d M Y' }}</strong>{% if review_category %} · <strong>{{ review_category }}</strong>{% endif %} · all days side by side):
         </span>
         <div class="download-links">
-          <a class="button secondary" style="padding: 0.45rem 0.85rem; font-size: 0.85rem;" href="{% url 'export-monthly' 'xlsx' %}?site={{ review_site_id }}&template={{ review_template_id }}&start_date={{ start_date|date:'Y-m-d' }}&end_date={{ end_date|date:'Y-m-d' }}">Monthly / Range Excel (.xlsx) ↓</a>
-          <a class="button secondary" style="padding: 0.45rem 0.85rem; font-size: 0.85rem;" href="{% url 'export-monthly' 'pdf' %}?site={{ review_site_id }}&template={{ review_template_id }}&start_date={{ start_date|date:'Y-m-d' }}&end_date={{ end_date|date:'Y-m-d' }}">Monthly / Range PDF (.pdf) ↓</a>
+          <a class="button secondary" style="padding: 0.45rem 0.85rem; font-size: 0.85rem;" href="{% url 'export-monthly' 'xlsx' %}?site={{ review_site_id }}&category={{ review_category|urlencode }}&template={{ review_template_id }}&start_date={{ start_date|date:'Y-m-d' }}&end_date={{ end_date|date:'Y-m-d' }}">Monthly / Range Excel (.xlsx) ↓</a>
+          <a class="button secondary" style="padding: 0.45rem 0.85rem; font-size: 0.85rem;" href="{% url 'export-monthly' 'pdf' %}?site={{ review_site_id }}&category={{ review_category|urlencode }}&template={{ review_template_id }}&start_date={{ start_date|date:'Y-m-d' }}&end_date={{ end_date|date:'Y-m-d' }}">Monthly / Range PDF (.pdf) ↓</a>
         </div>
       </div>
     </div>
@@ -283,10 +292,10 @@
                 {% else %}
                   <span class="badge pending">● Pending (0/{{ row.total_required }})</span>
                 {% endif %}
-                {% if row.assigned_checklists %}
-                  <div style="font-size: 0.75rem; color: #64748b; margin-top: 0.25rem;">
-                    {% for sc in row.assigned_checklists %}
-                      {{ sc.template.name }}{% if not forloop.last %}, {% endif %}
+                {% if row.group_progress %}
+                  <div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.3rem;">
+                    {% for gp in row.group_progress %}
+                      <span class="site-tag">{{ gp.category }}: {{ gp.submitted }}/{{ gp.total }}</span>
                     {% endfor %}
                   </div>
                 {% endif %}

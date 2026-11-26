@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import UserCreationForm
 from django.db.models import Q
 
-from .models import ChecklistTemplate, GlobalSettings, Site, SiteChecklist, SiteEquipment
+from .models import CATEGORY_CHOICES, ChecklistTemplate, GlobalSettings, Site, SiteChecklist, SiteEquipment
 
 User = get_user_model()
 
@@ -35,6 +35,11 @@ _ACCEPTED_UPLOAD_EXTS = (
 
 class ChecklistUploadForm(forms.Form):
     template_name = forms.CharField(max_length=160, label="Checklist name", widget=forms.TextInput(attrs={"placeholder": "e.g. 11 KV Equipment Control Panel"}))
+    category = forms.ChoiceField(
+        choices=[("", "Auto-detect from name / equipment")] + CATEGORY_CHOICES,
+        required=False,
+        label="Checklist group (optional)",
+    )
     file = forms.FileField(label="Checklist file (Excel .xlsx / .xls / .xlx, CSV, or PDF)")
     assign_to_sites = forms.ModelMultipleChoiceField(
         queryset=Site.objects.filter(active=True).order_by("name"),
@@ -52,9 +57,15 @@ class ChecklistUploadForm(forms.Form):
 
 
 class SiteChecklistAssignForm(forms.ModelForm):
+    category = forms.ChoiceField(
+        choices=[("", "Use template group (auto)")] + CATEGORY_CHOICES,
+        required=False,
+        label="Group / section override (optional)",
+    )
+
     class Meta:
         model = SiteChecklist
-        fields = ["template", "position", "active"]
+        fields = ["template", "category", "position", "active"]
         labels = {"template": "Checklist template", "position": "Sequence (0 = any order)"}
 
     def __init__(self, *args, site=None, **kwargs):

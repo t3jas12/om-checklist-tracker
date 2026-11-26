@@ -1,3 +1,4 @@
+import math
 from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
@@ -12,15 +13,13 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from .summary import summarize_submission_choices
+from checklist.models import resolve_equipment_label
+from .summary import summarize_submission_choices, supports_choice_summary
 
 
 def _equipment_label(submission):
-    return (
-        submission.equipment_snapshot
-        or ", ".join(submission.site.equipment.values_list("name", flat=True))
-        or submission.template.equipment_name
-    )
+    resolved = resolve_equipment_label(submission.site, submission.template)
+    return resolved or submission.equipment_snapshot
 
 
 def _split_section(section_text):
@@ -71,6 +70,76 @@ def _unique_sheet_title(existing_titles, raw_title):
         counter += 1
     existing_titles.add(candidate)
     return candidate
+
+
+_THIN_GRID = Side(style="thin", color="64748B")
+_MED_BRAND = Side(style="medium", color="123B32")
+_THIN_BRAND = Side(style="thin", color="123B32")
+_GRID_BORDER = Border(left=_THIN_GRID, right=_THIN_GRID, top=_THIN_GRID, bottom=_THIN_GRID)
+
+
+def _apply_box_border(ws, min_row, min_col, max_row, max_col, outer_side=_MED_BRAND, inner_side=_THIN_GRID):
+    """Apply crisp inner grid borders and a medium outer perimeter border to a range."""
+    for r in range(min_row, max_row + 1):
+        for c in range(min_col, max_col + 1):
+            ws.cell(r, c).border = Border(
+                left=outer_side if c == min_col else inner_side,
+                right=outer_side if c == max_col else inner_side,
+                top=outer_side if r == min_row else inner_side,
+                bottom=outer_side if r == max_row else inner_side,
+            )
+
+
+def _estimate_row_height(pairs, min_height=22):
+    """Estimate a comfortable Excel row height from (text, col_width) pairs."""
+    max_lines = 1
+    for text, width in pairs:
+        if not text:
+            continue
+        usable = max(int(width) - 2, 8)
+        lines = 0
+        for para in str(text).splitlines() or [""]:
+            lines += max(1, math.ceil(len(para) / usable))
+        max_lines = max(max_lines, lines)
+    return max(min_height, round(max_lines * 13.5 + 8))
+
+
+def _merge_vertical_runs(ws, col_idx, row_values, font, fill):
+    """Merge consecutive rows sharing the same non-empty label in a section column."""
+    if not row_values:
+        return
+    align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    run_start, prev_val = row_values[0]
+    for idx in range(1, len(row_values) + 1):
+        curr_row, curr_val = row_values[idx] if idx < len(row_values) else (None, None)
+        if curr_val != prev_val:
+            end_row = row_values[idx - 1][0]
+            if prev_val:
+                if end_row > run_start:
+                    ws.merge_cells(start_row=run_start, start_column=col_idx, end_row=end_row, end_column=col_idx)
+                for r in range(run_start, end_row + 1):
+                    cell = ws.cell(r, col_idx)
+                    cell.alignment = align
+                    cell.font = font
+                    cell.fill = fill
+                ws.cell(run_start, col_idx).value = prev_val
+            if idx < len(row_values):
+                run_start, prev_val = curr_row, curr_val
+
+
+def _configure_landscape_print(ws, repeat_rows="1:5"):
+    ws.views.sheetView[0].showGridLines = True
+    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.page_margins.left = 0.35
+    ws.page_margins.right = 0.35
+    ws.page_margins.top = 0.4
+    ws.page_margins.bottom = 0.4
+    if repeat_rows:
+        ws.print_title_rows = repeat_rows
 
 
 # ---------------------------------------------------------------------------
@@ -311,15 +380,17 @@ def _build_range_excel(submissions, site, start_date, end_date):
 
     HDR_FILL = PatternFill("solid", fgColor="123B32")
     SUB_HDR_FILL = PatternFill("solid", fgColor="1B4D42")
+    BANNER_FILL = PatternFill("solid", fgColor="F4F7F5")
+    SEC_FILL = PatternFill("solid", fgColor="EEF4F0")
     HDR_FONT = Font(bold=True, color="FFFFFF", size=9)
-    META_FONT = Font(bold=True, size=9)
-    BODY_FONT = Font(size=9)
-    SMALL_BOLD = Font(bold=True, size=8, color="123B32")
+    TITLE_FONT = Font(bold=True, color="FFFFFF", size=11)
+    META_FONT = Font(bold=True, size=9, color="19352F")
+    BODY_FONT = Font(size=9, color="19352F")
+    SMALL_BOLD = Font(bold=True, size=8.5, color="123B32")
+    SEC_FONT = Font(bold=True, size=9, color="123B32")
     CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
     LEFT = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    THIN = Side(style="thin", color="CBD5D1")
-    BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-    EVEN_FILL = PatternFill("solid", fgColor="F6F9F7")
+    EVEN_FILL = PatternFill("solid", fgColor="F8FAF9")
 
     comments_rows = []
 
@@ -343,14 +414,42 @@ def _build_range_excel(submissions, site, start_date, end_date):
         last_col = n_meta + len(days)
         equip = _equipment_label(first_sub) or "—"
         comp = sub_site.company or template.company or sub_site.name
+        doc_no = template.document_number or "—"
 
-        # --- Top Metadata Banner (Rows 1–3) ---
-        ws.cell(1, 1, f"Document No. {template.document_number}" if template.document_number else template.name).font = SMALL_BOLD
-        ws.cell(1, min(n_meta, 5), comp).font = SMALL_BOLD
-        ws.cell(2, 1, f"Site: {sub_site.name}").font = SMALL_BOLD
-        ws.cell(2, min(n_meta, 5), f"Equipment Name : {equip}").font = SMALL_BOLD
-        if last_col > n_meta + 2:
-            ws.cell(2, n_meta + 2, "Approved By :").font = SMALL_BOLD
+        col_widths = [18, 18, 9, 42, 34, 14, 10] if has_sub else [20, 9, 44, 34, 14, 10]
+        for ci, w in enumerate(col_widths, start=1):
+            ws.column_dimensions[get_column_letter(ci)].width = w
+
+        # --- Top Metadata Banner (Rows 1–3, boxed cleanly across 1..last_col) ---
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
+        t_cell = ws.cell(1, 1, f"O&M MONTHLY CHECKLIST — {template.name.upper()}")
+        t_cell.font = TITLE_FONT
+        t_cell.fill = HDR_FILL
+        t_cell.alignment = CENTER
+        for c in range(1, last_col + 1):
+            ws.cell(1, c).fill = HDR_FILL
+        ws.row_dimensions[1].height = 28
+
+        mid_end = max(n_meta, 5)
+        right_start = min(mid_end + 1, last_col)
+        left_end = 3 if n_meta >= 5 else 2
+
+        for r_num, blocks in (
+            (2, [(1, left_end, f"Document No. : {doc_no}"), (left_end + 1, mid_end, f"Company : {comp}"), (right_start, last_col, f"Site : {sub_site.name}")]),
+            (3, [(1, left_end, f"Period : {period_str}"), (left_end + 1, mid_end, f"Equipment Name : {equip}"), (right_start, last_col, "Approved By :")]),
+        ):
+            ws.row_dimensions[r_num].height = 22
+            for b_start, b_end, text in blocks:
+                if b_start > b_end:
+                    continue
+                if b_end > b_start:
+                    ws.merge_cells(start_row=r_num, start_column=b_start, end_row=r_num, end_column=b_end)
+                cell = ws.cell(r_num, b_start, text)
+                cell.font = SMALL_BOLD
+                cell.alignment = LEFT
+                for c in range(b_start, b_end + 1):
+                    ws.cell(r_num, c).fill = BANNER_FILL
+        _apply_box_border(ws, 1, 1, 3, last_col, outer_side=_MED_BRAND, inner_side=_THIN_GRID)
 
         # --- Table Header (Rows 4 & 5) ---
         for ci, label in enumerate(meta_cols, start=1):
@@ -359,8 +458,6 @@ def _build_range_excel(submissions, site, start_date, end_date):
             cell.fill = HDR_FILL
             cell.font = HDR_FONT
             cell.alignment = CENTER
-            cell.border = BORDER
-            ws.cell(5, ci).border = BORDER
             ws.cell(5, ci).fill = HDR_FILL
 
         ws.merge_cells(start_row=4, start_column=n_meta + 1, end_row=4, end_column=last_col)
@@ -369,7 +466,6 @@ def _build_range_excel(submissions, site, start_date, end_date):
         m_cell.font = HDR_FONT
         m_cell.alignment = CENTER
         for ci in range(n_meta + 1, last_col + 1):
-            ws.cell(4, ci).border = BORDER
             ws.cell(4, ci).fill = HDR_FILL
 
         for di, day in enumerate(days):
@@ -379,11 +475,11 @@ def _build_range_excel(submissions, site, start_date, end_date):
             d_cell.fill = SUB_HDR_FILL
             d_cell.font = HDR_FONT
             d_cell.alignment = CENTER
-            d_cell.border = BORDER
             ws.column_dimensions[get_column_letter(ci)].width = 7 if not multi_month else 9
 
-        ws.row_dimensions[4].height = 20
-        ws.row_dimensions[5].height = 20
+        ws.row_dimensions[4].height = 22
+        ws.row_dimensions[5].height = 22
+        _apply_box_border(ws, 4, 1, 5, last_col, outer_side=_MED_BRAND, inner_side=_THIN_GRID)
 
         # Build lookup: day -> {item_id -> answer}
         day_answers = {}
@@ -422,34 +518,36 @@ def _build_range_excel(submissions, site, start_date, end_date):
                     })
 
         # --- Data Rows ---
-        prev_sec = None
-        prev_sub = None
+        data_start_row = 6
+        row_idx = data_start_row
         has_choices = False
-        row_idx = 6
+        sec_runs = []
+        sub_runs = []
+        desc_col = 4 if has_sub else 3
+        std_col = 5 if has_sub else 4
+        cp_col = 3 if has_sub else 2
+        freq_col = n_meta
+
         for item in items:
             if item.answer_type == "choices":
                 has_choices = True
             row_fill = EVEN_FILL if row_idx % 2 == 0 else PatternFill()
             sec, sub_sec = _split_section(item.section)
-            sec_disp = sec if sec != prev_sec else ""
-            sub_disp = sub_sec if (sub_sec != prev_sub or sec != prev_sec) else ""
-            prev_sec = sec
-            prev_sub = sub_sec
+            sec_runs.append((row_idx, sec))
+            if has_sub:
+                sub_runs.append((row_idx, sub_sec))
 
             meta_vals = (
-                [sec_disp, sub_disp, item.checkpoint_no, item.description, item.standard or "—", item.method or "—", item.frequency or "Daily"]
+                [sec, sub_sec, item.checkpoint_no, item.description, item.standard or "—", item.method or "—", item.frequency or "Daily"]
                 if has_sub
-                else [sec_disp, item.checkpoint_no, item.description, item.standard or "—", item.method or "—", item.frequency or "Daily"]
+                else [sec, item.checkpoint_no, item.description, item.standard or "—", item.method or "—", item.frequency or "Daily"]
             )
-            desc_col = 4 if has_sub else 3
-            cp_col = 3 if has_sub else 2
-            freq_col = n_meta
 
             for ci, val in enumerate(meta_vals, start=1):
                 cell = ws.cell(row_idx, ci, val)
                 cell.font = META_FONT if ci == desc_col else BODY_FONT
-                cell.alignment = CENTER if ci in (cp_col, freq_col) else LEFT
-                cell.border = BORDER
+                cell.alignment = CENTER if ci in (1, cp_col, freq_col) or (has_sub and ci == 2) else LEFT
+                cell.border = _GRID_BORDER
                 cell.fill = row_fill
 
             for di, day in enumerate(days):
@@ -458,7 +556,7 @@ def _build_range_excel(submissions, site, start_date, end_date):
                 val = ans.value if ans else ""
                 cell = ws.cell(row_idx, ci, val)
                 cell.alignment = CENTER
-                cell.border = BORDER
+                cell.border = _GRID_BORDER
                 cell.font = BODY_FONT
                 cell.fill = _status_fill(val) or row_fill
                 if has_choices and val and len(val) > 8:
@@ -466,11 +564,23 @@ def _build_range_excel(submissions, site, start_date, end_date):
                         ws.column_dimensions[get_column_letter(ci)].width or 7, 14
                     )
 
+            ws.row_dimensions[row_idx].height = _estimate_row_height([
+                (item.description, col_widths[desc_col - 1]),
+                (item.standard, col_widths[std_col - 1]),
+                (sec, col_widths[0]),
+            ])
             _attach_row_dropdown(ws, item, row_idx, n_meta + 1, last_col)
             row_idx += 1
 
-        # --- Dynamic Daily Option Counts (when template has choices items, e.g. inv3) ---
-        if has_choices:
+        data_end_row = row_idx - 1
+        if data_end_row >= data_start_row:
+            _merge_vertical_runs(ws, 1, sec_runs, SEC_FONT, SEC_FILL)
+            if has_sub:
+                _merge_vertical_runs(ws, 2, sub_runs, SEC_FONT, SEC_FILL)
+
+        # --- Dynamic Daily Option Counts (only for Inverter checklists, e.g. inv3) ---
+        show_choice_counts = has_choices and supports_choice_summary(template)
+        if show_choice_counts:
             day_summaries = {sub.checklist_date: summarize_submission_choices(sub) for sub in subs}
             ordered_labels = []
             label_kind = {}
@@ -494,7 +604,7 @@ def _build_range_excel(submissions, site, start_date, end_date):
                     c = ws.cell(row_idx, ci, f"{opt_label} Count" if ci == desc_col else "")
                     c.font = SMALL_BOLD
                     c.alignment = LEFT
-                    c.border = BORDER
+                    c.border = _GRID_BORDER
                     c.fill = row_tint
                 for di, day in enumerate(days):
                     ci = n_meta + 1 + di
@@ -505,33 +615,57 @@ def _build_range_excel(submissions, site, start_date, end_date):
                     c = ws.cell(row_idx, ci, cnt)
                     c.font = SMALL_BOLD
                     c.alignment = CENTER
-                    c.border = BORDER
+                    c.border = _GRID_BORDER
                     c.fill = row_tint
+                ws.row_dimensions[row_idx].height = 22
                 row_idx += 1
 
-        # --- Footer: Remarks, Legends, Signature, Note (matches O&M sheet) ---
+        table_bottom_row = row_idx - 1
+        if table_bottom_row >= data_start_row:
+            _apply_box_border(ws, data_start_row, 1, table_bottom_row, last_col, outer_side=_MED_BRAND, inner_side=_THIN_GRID)
+            # Emphasize outer right/left border of metadata block vs daily grid
+            for r in range(4, table_bottom_row + 1):
+                c_meta = ws.cell(r, n_meta)
+                b = c_meta.border
+                c_meta.border = Border(left=b.left, right=_MED_BRAND, top=b.top, bottom=b.bottom)
+            # Separate daily summary count rows from checkpoint rows with a medium green line
+            if show_choice_counts and table_bottom_row > data_end_row:
+                for c in range(1, last_col + 1):
+                    cell = ws.cell(data_end_row + 1, c)
+                    b = cell.border
+                    cell.border = Border(left=b.left, right=b.right, top=_MED_BRAND, bottom=b.bottom)
+
+        # --- Footer Box: Remarks, Legends, Signature, Note ---
         sheet_has_comments = any(
             c["site"] == sub_site.name and c["template"] == template.name for c in comments_rows
         )
         row_idx += 1
-        ws.cell(row_idx, 1, "Remarks:").font = SMALL_BOLD
-        ws.cell(row_idx, 2, "See 'Comments & Remarks' sheet for daily remarks and item comments." if sheet_has_comments else "No abnormalities / remarks recorded.").font = BODY_FONT
-        row_idx += 1
-        ws.cell(row_idx, 1, "Legends:").font = SMALL_BOLD
-        ws.cell(row_idx, 2, "IF OK : YES   |   IF NOT OK : NO   |   D - Daily   |   W - Weekly").font = BODY_FONT
-        row_idx += 1
-        ws.cell(row_idx, 1, "Signature").font = SMALL_BOLD
-        ws.cell(row_idx, 2, f"Checked & done by: {', '.join(submitters) or '—'}").font = BODY_FONT
-        ws.cell(row_idx, min(n_meta, 5), "Verify by:").font = SMALL_BOLD
-        row_idx += 1
-        ws.cell(row_idx, 1, "Note:").font = SMALL_BOLD
-        ws.cell(row_idx, 2, "If Found abnormal inform Maintenance Department.").font = BODY_FONT
-
-        col_widths = [16, 18, 8, 40, 32, 13, 10] if has_sub else [18, 8, 42, 34, 13, 10]
-        for ci, w in enumerate(col_widths, start=1):
-            ws.column_dimensions[get_column_letter(ci)].width = w
+        footer_start = row_idx
+        footer_rows = [
+            ("Remarks :", "See 'Comments & Remarks' sheet for daily remarks and item comments." if sheet_has_comments else "No abnormalities / remarks recorded."),
+            ("Legends :", "IF OK : YES   |   IF NOT OK : NO   |   D - Daily   |   W - Weekly"),
+            ("Signature :", f"Checked & done by: {', '.join(submitters) or '—'}     |     Verify by: ______________________"),
+            ("Note :", "If Found abnormal inform Maintenance Department."),
+        ]
+        for label_txt, val_txt in footer_rows:
+            ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=2)
+            ws.merge_cells(start_row=row_idx, start_column=3, end_row=row_idx, end_column=last_col)
+            lcell = ws.cell(row_idx, 1, label_txt)
+            lcell.font = SMALL_BOLD
+            lcell.alignment = LEFT
+            vcell = ws.cell(row_idx, 3, val_txt)
+            vcell.font = BODY_FONT
+            vcell.alignment = LEFT
+            for c in (1, 2):
+                ws.cell(row_idx, c).fill = SEC_FILL
+            for c in range(3, last_col + 1):
+                ws.cell(row_idx, c).fill = PatternFill("solid", fgColor="FFFFFF")
+            ws.row_dimensions[row_idx].height = 22
+            row_idx += 1
+        _apply_box_border(ws, footer_start, 1, row_idx - 1, last_col, outer_side=_MED_BRAND, inner_side=_THIN_GRID)
 
         ws.freeze_panes = f"{get_column_letter(n_meta + 1)}6"
+        _configure_landscape_print(ws, repeat_rows="1:5")
 
     # --- Comments & Remarks sheet ---
     if comments_rows:
@@ -542,18 +676,23 @@ def _build_range_excel(submissions, site, start_date, end_date):
             cell.fill = HDR_FILL
             cell.font = HDR_FONT
             cell.alignment = CENTER
-            cell.border = BORDER
+            cell.border = _GRID_BORDER
+        cws.row_dimensions[1].height = 24
         for ri, row in enumerate(sorted(comments_rows, key=lambda r: (r["date"], r["site"])), start=2):
             vals = [row["date"].strftime("%d %b %Y"), row["site"], row["template"], row["type"], row["checkpoint"], row["observation"], row["text"], row["by"]]
             fill = EVEN_FILL if ri % 2 == 0 else PatternFill()
             for ci, v in enumerate(vals, start=1):
                 cell = cws.cell(ri, ci, v)
                 cell.font = BODY_FONT
-                cell.alignment = LEFT
-                cell.border = BORDER
+                cell.alignment = CENTER if ci in (1, 5) else LEFT
+                cell.border = _GRID_BORDER
                 cell.fill = fill
-        for col, width in zip(["A", "B", "C", "D", "E", "F", "G", "H"], [14, 18, 24, 14, 12, 34, 48, 18]):
+            cws.row_dimensions[ri].height = _estimate_row_height([(row["observation"], 34), (row["text"], 48)])
+        _apply_box_border(cws, 1, 1, len(comments_rows) + 1, 8, outer_side=_MED_BRAND, inner_side=_THIN_GRID)
+        for col, width in zip(["A", "B", "C", "D", "E", "F", "G", "H"], [14, 20, 24, 15, 13, 36, 50, 20]):
             cws.column_dimensions[col].width = width
+        cws.freeze_panes = "A2"
+        _configure_landscape_print(cws, repeat_rows="1:1")
 
     output = BytesIO()
     wb.save(output)

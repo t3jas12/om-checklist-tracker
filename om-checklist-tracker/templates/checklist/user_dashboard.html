@@ -69,87 +69,108 @@
   </section>
 {% endif %}
 
-<!-- Today's Checklists Sequence Panel -->
+<!-- Today's Checklists Grouped by Equipment Category -->
 <section class="panel">
   <div class="panel-head">
     <div>
       <h2>Today's checklists</h2>
-      <p>Assigned checklists are reused daily and reset at midnight IST. Complete unsequenced checks in any order; numbered checks follow the admin sequence.</p>
+      <p>Grouped by equipment section. Complete unsequenced checks in any order; numbered checks follow the admin sequence.</p>
     </div>
     <span class="date-label">{{ today|date:'d M Y' }}</span>
   </div>
 
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Sequence</th>
-          <th>Checklist</th>
-          <th>Status</th>
-          <th>Submitted at</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for item in checklist_status_list %}
-          <tr>
-            <td>
-              {% if item.position == 0 or item.position == None %}
-                <span class="badge">Any order</span>
-              {% else %}
-                <strong>#{{ item.position }}</strong>
+  {% if grouped_checklists %}
+    <div style="display: flex; flex-direction: column; gap: 1rem;">
+      {% for group in grouped_checklists %}
+        <details open style="border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #fff;">
+          <summary style="cursor: pointer; list-style: none; padding: 0.85rem 1.1rem; background: #f4f7f5; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.6rem;">
+              <strong style="font-size: 14px; color: var(--ink);">{{ group.category }}</strong>
+              <span class="badge {% if group.all_done %}success{% else %}pending{% endif %}">
+                {{ group.submitted_count }} / {{ group.total }} submitted
+              </span>
+              {% if group.non_op_count > 0 %}
+                <span class="badge" style="background:#fee2e2;color:#a43d31;">{{ group.non_op_count }} Non-Operational</span>
               {% endif %}
-            </td>
-            <td>
-              <strong>{{ item.template.name }}</strong>
-              <small>{{ item.template.items.count }} checkpoints</small>
-              {% if item.choice_summary %}
-                <div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.3rem;">
-                  {% for opt in item.choice_summary.option_counts %}
-                    <span class="badge" style="{% if opt.kind == 'fault' %}background:#fee2e2;color:#a43d31;{% elif opt.kind == 'spare' %}background:#fef3c7;color:#92400e;{% elif opt.kind == 'ok' %}background:#e8f5ef;color:#18835e;{% else %}background:#f1f5f3;color:#334e45;{% endif %}">{{ opt.label }}: {{ opt.count }}</span>
-                  {% endfor %}
-                </div>
-              {% endif %}
-            </td>
-            <td>
-              {% if item.submission %}
-                <span class="badge success">● Submitted</span>
-              {% elif item.available and open %}
-                <span class="badge pending">● Ready to fill</span>
-              {% elif open %}
-                <span class="badge pending" style="opacity: 0.7;">Upcoming</span>
-              {% else %}
-                <span class="badge pending">Locked</span>
-              {% endif %}
-            </td>
-            <td>
-              {% if item.submission %}
-                {{ item.submission.submitted_at|date:'H:i' }} IST
-              {% else %}
-                <span class="muted">—</span>
-              {% endif %}
-            </td>
-            <td>
-              {% if item.submission %}
-                <div class="download-links">
-                  <a class="table-action" href="{% url 'submission-review' item.submission.id %}">Review</a>
-                  <a href="{% url 'operator-excel-review' item.submission.id %}">Excel</a>
-                </div>
-              {% elif item.available and open %}
-                <a class="button primary" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;" href="{% url 'checklist-form' %}?template_id={{ item.template.id }}">Fill now →</a>
-              {% else %}
-                <span class="muted">—</span>
-              {% endif %}
-            </td>
-          </tr>
-        {% empty %}
-          <tr>
-            <td colspan="5" class="empty">No checklists configured for this site yet.</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+            </div>
+            <span style="font-size: 11px; color: var(--muted);">
+              {% if group.all_done %}✓ Section complete{% elif group.available_count %}{{ group.available_count }} ready to fill{% else %}Upcoming{% endif %}
+            </span>
+          </summary>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Sequence</th>
+                  <th>Checklist</th>
+                  <th>Status</th>
+                  <th>Submitted at</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in group.items %}
+                  <tr>
+                    <td>
+                      {% if item.position == 0 or item.position == None %}
+                        <span class="badge">Any order</span>
+                      {% else %}
+                        <strong>#{{ item.position }}</strong>
+                      {% endif %}
+                    </td>
+                    <td>
+                      <strong>{{ item.template.name }}</strong>
+                      <small>{{ item.template.items.count }} checkpoints</small>
+                      {% if item.choice_summary %}
+                        <div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.3rem;">
+                          {% for opt in item.choice_summary.option_counts %}
+                            <span class="badge" style="{% if opt.kind == 'fault' %}background:#fee2e2;color:#a43d31;{% elif opt.kind == 'spare' %}background:#fef3c7;color:#92400e;{% elif opt.kind == 'ok' %}background:#e8f5ef;color:#18835e;{% else %}background:#f1f5f3;color:#334e45;{% endif %}">{{ opt.label }}: {{ opt.count }}</span>
+                          {% endfor %}
+                        </div>
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if item.submission %}
+                        <span class="badge success">● Submitted</span>
+                      {% elif item.available and open %}
+                        <span class="badge pending">● Ready to fill</span>
+                      {% elif open %}
+                        <span class="badge pending" style="opacity: 0.7;">Upcoming</span>
+                      {% else %}
+                        <span class="badge pending">Locked</span>
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if item.submission %}
+                        {{ item.submission.submitted_at|date:'H:i' }} IST
+                      {% else %}
+                        <span class="muted">—</span>
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if item.submission %}
+                        <div class="download-links">
+                          <a class="table-action" href="{% url 'submission-review' item.submission.id %}">Review</a>
+                          <a href="{% url 'operator-excel-review' item.submission.id %}">Excel</a>
+                        </div>
+                      {% elif item.available and open %}
+                        <a class="button primary" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;" href="{% url 'checklist-form' %}?template_id={{ item.template.id }}">Fill now →</a>
+                      {% else %}
+                        <span class="muted">—</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="empty">No checklists configured for this site yet.</p>
+  {% endif %}
 </section>
 
 <section class="panel">

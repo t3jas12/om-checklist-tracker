@@ -22,6 +22,7 @@ urlpatterns = [
     path("manage/sites/<int:site_id>/equipment/add/", views.add_site_equipment, name="add-site-equipment"),
     path("manage/sites/<int:site_id>/equipment/<int:equipment_id>/remove/", views.remove_site_equipment, name="remove-site-equipment"),
     path("manage/sites/<int:site_id>/checklists/assign/", views.assign_site_checklist, name="assign-site-checklist"),
+    path("manage/sites/<int:site_id>/checklists/<int:site_checklist_id>/category/", views.update_site_checklist_category, name="update-site-checklist-category"),
     path("manage/sites/<int:site_id>/checklists/<int:site_checklist_id>/remove/", views.remove_site_checklist, name="remove-site-checklist"),
     path("manage/checklists/", views.manage_checklists, name="manage-checklists"),
     path("manage/checklists/<int:template_id>/preview/", views.preview_checklist_template, name="preview-checklist-template"),
