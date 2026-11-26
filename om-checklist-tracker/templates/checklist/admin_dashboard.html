@@ -43,11 +43,11 @@
   </div>
 
   {% if active_tab == 'review' %}
-    <!-- Review Tab (Inline View for Same Day or Multiple Days without downloading) -->
+    <!-- Review Tab (Inline View & Full-Month Export for Selected Range) -->
     <div style="background: var(--surface-subtle, #f8faf9); padding: 1rem 1.25rem; border-radius: 8px; margin-bottom: 1.5rem; border: 1px solid var(--border, #cbd5d1);">
-      <form method="get" style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end;">
+      <form method="get" style="display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;">
         <input type="hidden" name="tab" value="review">
-        <div style="flex: 1; min-width: 180px;">
+        <div style="flex: 1; min-width: 170px;">
           <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Site</label>
           <select name="site" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid #cbd5d1;">
             <option value="">All active sites</option>
@@ -56,23 +56,100 @@
             {% endfor %}
           </select>
         </div>
-        <div style="min-width: 150px;">
+        <div style="flex: 1; min-width: 170px;">
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Checklist</label>
+          <select name="template" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid #cbd5d1;">
+            <option value="">All checklists</option>
+            {% for tmpl in all_templates %}
+              <option value="{{ tmpl.id }}" {% if review_template_id == tmpl.id|stringformat:'s' %}selected{% endif %}>{{ tmpl.name }} (v{{ tmpl.version }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div style="min-width: 140px;">
           <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">From date</label>
           <input type="date" name="start_date" value="{{ start_date|date:'Y-m-d' }}" style="width: 100%; padding: 0.45rem; border-radius: 6px; border: 1px solid #cbd5d1;">
         </div>
-        <div style="min-width: 150px;">
+        <div style="min-width: 140px;">
           <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">To date</label>
           <input type="date" name="end_date" value="{{ end_date|date:'Y-m-d' }}" style="width: 100%; padding: 0.45rem; border-radius: 6px; border: 1px solid #cbd5d1;">
         </div>
         <div>
-          <button class="button primary" style="padding: 0.5rem 1.25rem;" type="submit">Filter review</button>
+          <button class="button primary" style="padding: 0.5rem 1.15rem;" type="submit">Filter review</button>
         </div>
-        <div style="display: flex; gap: 0.5rem; align-self: flex-end;">
-          <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?tab=review&start_date={{ today|date:'Y-m-d' }}&end_date={{ today|date:'Y-m-d' }}">Today</a>
-          <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?tab=review&site={{ review_site_id }}">All days</a>
+        <div style="display: flex; gap: 0.45rem; flex-wrap: wrap; align-self: flex-end;">
+          <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?tab=review&site={{ review_site_id }}&template={{ review_template_id }}&start_date={{ today|date:'Y-m-d' }}&end_date={{ today|date:'Y-m-d' }}">Today</a>
+          <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?tab=review&site={{ review_site_id }}&template={{ review_template_id }}&month={{ current_month_str }}">This month</a>
+          <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?tab=review&site={{ review_site_id }}&template={{ review_template_id }}&all_days=1">All days</a>
         </div>
       </form>
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px dashed #cbd5d1;">
+        <span style="font-size: 0.85rem; color: #536b63;">
+          Full-period matrix export (<strong>{{ start_date|date:'d M Y' }}</strong> to <strong>{{ end_date|date:'d M Y' }}</strong> · all days side by side):
+        </span>
+        <div class="download-links">
+          <a class="button secondary" style="padding: 0.45rem 0.85rem; font-size: 0.85rem;" href="{% url 'export-monthly' 'xlsx' %}?site={{ review_site_id }}&template={{ review_template_id }}&start_date={{ start_date|date:'Y-m-d' }}&end_date={{ end_date|date:'Y-m-d' }}">Monthly / Range Excel (.xlsx) ↓</a>
+          <a class="button secondary" style="padding: 0.45rem 0.85rem; font-size: 0.85rem;" href="{% url 'export-monthly' 'pdf' %}?site={{ review_site_id }}&template={{ review_template_id }}&start_date={{ start_date|date:'Y-m-d' }}&end_date={{ end_date|date:'Y-m-d' }}">Monthly / Range PDF (.pdf) ↓</a>
+        </div>
+      </div>
     </div>
+
+    {% if string_summary_subs %}
+      <section class="panel" style="border: 1px solid #cbd5d1; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; background: #fff;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.75rem;">
+          <div>
+            <h3 style="margin: 0; font-size: 1rem; color: #123b32;">Inverter / String Status Summary</h3>
+            <small style="color: #536b63;">Dynamic counts across filtered checklists ({{ start_date|date:'d M Y' }} to {{ end_date|date:'d M Y' }})</small>
+          </div>
+          <span class="badge {% if total_non_operational > 0 %}pending{% else %}success{% endif %}" style="{% if total_non_operational > 0 %}background:#fee2e2;color:#a43d31;{% endif %}">
+            Total Non-Operational: {{ total_non_operational }}
+          </span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Site</th>
+                <th>Inverter / Checklist</th>
+                <th>Breakdown</th>
+                <th>Non-Operational Count</th>
+                <th>Non-Operational Items</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for s in string_summary_subs %}
+                <tr>
+                  <td><strong>{{ s.checklist_date|date:'d M Y' }}</strong></td>
+                  <td>{{ s.site.name }}</td>
+                  <td><strong>{{ s.template.name }}</strong></td>
+                  <td>
+                    <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+                      {% for opt in s.choice_summary.option_counts %}
+                        <span class="badge" style="{% if opt.kind == 'fault' %}background:#fee2e2;color:#a43d31;{% elif opt.kind == 'spare' %}background:#fef3c7;color:#92400e;{% elif opt.kind == 'ok' %}background:#e8f5ef;color:#18835e;{% else %}background:#f1f5f3;color:#334e45;{% endif %}">
+                          {{ opt.label }}: {{ opt.count }}
+                        </span>
+                      {% endfor %}
+                    </div>
+                  </td>
+                  <td>
+                    <strong style="font-size: 1rem; color: {% if s.choice_summary.non_operational_count > 0 %}#b5473d{% else %}#18835e{% endif %};">
+                      {{ s.choice_summary.non_operational_count }} / {{ s.choice_summary.total_items }}
+                    </strong>
+                  </td>
+                  <td>
+                    {% if s.choice_summary.non_operational_labels %}
+                      <span style="color:#a43d31;font-weight:600;">{{ s.choice_summary.non_operational_labels|join:", " }}</span>
+                    {% else %}
+                      <span class="muted">None</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% endif %}
 
     {% if review_submissions %}
       <div style="display: flex; flex-direction: column; gap: 1.5rem;">
@@ -95,6 +172,21 @@
                 <a href="{% url 'export-submission' sub.id 'pdf' %}">PDF</a>
               </div>
             </div>
+            {% if sub.choice_summary %}
+              <div style="padding: 0.7rem 1.25rem; background: #fafcfb; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.65rem;">
+                <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 0.45rem;">
+                  <strong style="font-size: 0.85rem; color: #123b32;">Total: {{ sub.choice_summary.total_items }}</strong>
+                  {% for opt in sub.choice_summary.option_counts %}
+                    <span class="badge" style="{% if opt.kind == 'fault' %}background:#fee2e2;color:#a43d31;{% elif opt.kind == 'spare' %}background:#fef3c7;color:#92400e;{% elif opt.kind == 'ok' %}background:#e8f5ef;color:#18835e;{% else %}background:#f1f5f3;color:#334e45;{% endif %}">
+                      {{ opt.label }}: {{ opt.count }}
+                    </span>
+                  {% endfor %}
+                </div>
+                {% if sub.choice_summary.non_operational_labels %}
+                  <span style="font-size: 0.82rem; color: #a43d31;"><strong>Non-Operational:</strong> {{ sub.choice_summary.non_operational_labels|join:", " }}</span>
+                {% endif %}
+              </div>
+            {% endif %}
 
             <div class="table-wrap" style="max-height: 400px; overflow-y: auto;">
               <table class="review-table">
@@ -198,6 +290,15 @@
                     {% endfor %}
                   </div>
                 {% endif %}
+                {% if row.choice_subs %}
+                  <div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.35rem;">
+                    {% for cs in row.choice_subs %}
+                      <a href="?tab=review&site={{ row.site.id }}&template={{ cs.template.id }}&start_date={{ today|date:'Y-m-d' }}&end_date={{ today|date:'Y-m-d' }}" class="badge" style="{% if cs.choice_summary.non_operational_count > 0 %}background:#fee2e2;color:#a43d31;{% else %}background:#e8f5ef;color:#18835e;{% endif %}">
+                        {{ cs.template.name }}: {{ cs.choice_summary.non_operational_count }} Non-Op / {{ cs.choice_summary.total_items }}
+                      </a>
+                    {% endfor %}
+                  </div>
+                {% endif %}
               </td>
               <td>
                 {% if row.first_submission %}
@@ -207,15 +308,15 @@
                 {% endif %}
               </td>
               <td>
-                {% if row.submissions %}
-                  <div class="download-links">
+                <div class="download-links">
+                  {% if row.submissions %}
                     <a class="table-action" href="?tab=review&site={{ row.site.id }}&start_date={{ today|date:'Y-m-d' }}&end_date={{ today|date:'Y-m-d' }}">Inline review</a>
-                    <a href="{% url 'export-submission' row.first_submission.id 'xlsx' %}">Excel</a>
-                    <a href="{% url 'export-submission' row.first_submission.id 'pdf' %}">PDF</a>
-                  </div>
-                {% else %}
-                  <span class="muted">—</span>
-                {% endif %}
+                    <a href="{% url 'export-submission' row.first_submission.id 'xlsx' %}">Today Excel</a>
+                    <a href="{% url 'export-submission' row.first_submission.id 'pdf' %}">Today PDF</a>
+                  {% endif %}
+                  <a href="{% url 'export-monthly' 'xlsx' %}?site={{ row.site.id }}&month={{ current_month_str }}">Month Excel</a>
+                  <a href="{% url 'export-monthly' 'pdf' %}?site={{ row.site.id }}&month={{ current_month_str }}">Month PDF</a>
+                </div>
               </td>
             </tr>
           {% empty %}

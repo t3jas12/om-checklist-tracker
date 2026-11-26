@@ -1,0 +1,90 @@
+<div style="display: flex; flex-direction: column; gap: 1.25rem;">
+  {% for es in executive_list %}
+    <section class="panel" style="padding: 0; overflow: hidden; margin-bottom: 0; border: {% if es.total_non_operational > 0 %}1.5px solid #ef4444{% else %}1px solid #cbd5d1{% endif %}; border-radius: 10px;">
+      <div style="padding: 1rem 1.25rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; background: {% if es.total_non_operational > 0 %}#fef2f2{% else %}#f4f9f6{% endif %}; border-bottom: 1px solid {% if es.total_non_operational > 0 %}#fecaca{% else %}#dce7e1{% endif %};">
+        <div>
+          <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+            <strong style="font-size: 1.05rem; color: {% if es.total_non_operational > 0 %}#991b1b{% else %}#123b32{% endif %};">{{ es.site.name }}</strong>
+            {% if es.total_non_operational > 0 %}
+              <span class="badge" style="background: #dc2626; color: #ffffff;">● {{ es.total_non_operational }} Non-Operational Asset{{ es.total_non_operational|pluralize }}</span>
+            {% else %}
+              <span class="badge success">● 0 Non-Operational</span>
+            {% endif %}
+          </div>
+          <small style="color: #64748b; display: block; margin-top: 0.25rem;">
+            {{ es.submitted_days }} day{{ es.submitted_days|pluralize }} recorded
+            {% if es.days_with_issues > 0 %} · <span style="color: #b91c1c; font-weight: 600;">{{ es.days_with_issues }} day{{ es.days_with_issues|pluralize }} with non-operational assets</span>{% endif %}
+          </small>
+        </div>
+        <div class="download-links">
+          <a href="{% url 'executive-summary' %}?site={{ es.site.id }}&all_days=1">All days for site</a>
+          <a href="{% url 'export-monthly' 'xlsx' %}?site={{ es.site.id }}{% if current_month_str %}&month={{ current_month_str }}{% endif %}">Month Excel</a>
+        </div>
+      </div>
+
+      {% if es.daily_rows %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 120px;">Date</th>
+                <th style="width: 170px;">Non-Operational</th>
+                <th>Non-Operational Assets (by Checklist / Equipment)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for day_row in es.daily_rows %}
+                <tr style="{% if day_row.non_operational_count > 0 %}background: #fff5f5;{% endif %}">
+                  <td style="{% if day_row.non_operational_count > 0 %}border-left: 4px solid #dc2626;{% endif %}">
+                    <strong style="color: {% if day_row.non_operational_count > 0 %}#991b1b{% else %}var(--ink){% endif %};">{{ day_row.date|date:'d M Y' }}</strong>
+                    <small>{{ day_row.submissions_count }} checklist{{ day_row.submissions_count|pluralize }}</small>
+                  </td>
+                  <td>
+                    {% if day_row.non_operational_count > 0 %}
+                      <span class="badge" style="background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; font-size: 11px;">
+                        {{ day_row.non_operational_count }} Non-Operational
+                      </span>
+                    {% else %}
+                      <span class="badge success">0 Non-Operational</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if day_row.by_checklist %}
+                      <div style="display: flex; flex-direction: column; gap: 0.55rem;">
+                        {% for grp in day_row.by_checklist %}
+                          <div style="padding: 0.5rem 0.7rem; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 7px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem;">
+                              <strong style="color: #7f1d1d; font-size: 12px;">{{ grp.template_name }} ({{ grp.count }} non-operational)</strong>
+                              <a href="{% url 'submission-review' grp.submission.id %}" style="font-size: 11px; font-weight: 700; color: #991b1b;">Review →</a>
+                            </div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 0.35rem;">
+                              {% for asset in grp.assets %}
+                                <span style="display: inline-flex; align-items: center; gap: 0.3rem; padding: 3px 8px; border-radius: 6px; background: #ffffff; border: 1px solid #f87171; color: #991b1b; font-size: 11px; font-weight: 600;" title="{% if asset.section %}{{ asset.section }} · {% endif %}{{ asset.status }}{% if asset.comment %} — {{ asset.comment }}{% endif %}">
+                                  <span>●</span>
+                                  <span>{{ asset.label }}</span>
+                                  <span style="font-weight: 500; color: #b91c1c;">({{ asset.status }})</span>
+                                </span>
+                              {% endfor %}
+                            </div>
+                          </div>
+                        {% endfor %}
+                      </div>
+                    {% else %}
+                      <span style="color: #18835e; font-size: 12px; font-weight: 600;">All submitted assets operational</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div style="padding: 1rem 1.25rem; color: #64748b; font-size: 12px;">
+          No checklist submissions recorded for this site in the selected period.
+        </div>
+      {% endif %}
+    </section>
+  {% empty %}
+    <div class="empty">No active sites found.</div>
+  {% endfor %}
+</div>

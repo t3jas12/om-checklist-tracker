@@ -1,1 +1,45 @@
-{% extends 'base.html' %}{% block title %}History · O&amp;M{% endblock %}{% block content %}<div class="page-heading"><div><div class="eyebrow">RECORDS &amp; SUBMISSIONS</div><h1>Checklist history</h1><p>{% if request.user.is_staff %}Review submissions across your solar sites.{% else %}Your site's submitted checklists.{% endif %}</p></div></div>{% if request.user.is_staff %}<form class="filter-bar" method="get"><label for="site">Site</label><select name="site" id="site"><option value="">All sites</option>{% for site in sites %}<option value="{{ site.id }}" {% if selected_site == site.id|stringformat:'s' %}selected{% endif %}>{{ site.name }}</option>{% endfor %}</select><button class="button secondary">Filter</button></form>{% endif %}<section class="panel"><div class="table-wrap"><table><thead><tr><th>Date</th>{% if request.user.is_staff %}<th>Site</th><th>Submitted by</th>{% endif %}<th>Time</th><th>Exports</th></tr></thead><tbody>{% for submission in submissions %}<tr><td><strong>{{ submission.checklist_date|date:'d M Y' }}</strong></td>{% if request.user.is_staff %}<td>{{ submission.site.name }}</td><td>{{ submission.submitted_by.get_full_name|default:submission.submitted_by.username }}</td>{% endif %}<td>{{ submission.submitted_at|date:'H:i' }} IST</td><td>{% if request.user.is_staff %}<div class="download-links"><a href="{% url 'export-submission' submission.id 'xlsx' %}">Excel</a><a href="{% url 'export-submission' submission.id 'pdf' %}">PDF</a></div>{% elif submission.submitted_by_id == request.user.id %}<div class="download-links"><a href="{% url 'submission-review' submission.id %}">Review</a><a href="{% url 'operator-excel-review' submission.id %}">Excel</a></div>{% else %}<span class="muted">—</span>{% endif %}</td></tr>{% empty %}<tr><td colspan="5" class="empty">No checklists found.</td></tr>{% endfor %}</tbody></table></div></section>{% endblock %}
+{% extends 'base.html' %}{% block title %}History · O&amp;M{% endblock %}{% block content %}<div class="page-heading"><div><div class="eyebrow">RECORDS &amp; SUBMISSIONS</div><h1>Checklist history</h1><p>{% if request.user.is_staff %}Review submissions across your solar sites and download monthly reports.{% else %}Your site's submitted checklists and monthly report exports.{% endif %}</p></div></div>
+
+<section class="panel" style="margin-bottom: 1.25rem; padding: 1rem 1.25rem;">
+  <div style="display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 1rem;">
+    <form class="filter-bar" method="get" style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin: 0;">
+      {% if request.user.is_staff %}
+      <div>
+        <label for="site" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Site</label>
+        <select name="site" id="site">
+          <option value="">All sites</option>
+          {% for site in sites %}<option value="{{ site.id }}" {% if selected_site == site.id|stringformat:'s' %}selected{% endif %}>{{ site.name }}</option>{% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div>
+        <label for="template" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Checklist</label>
+        <select name="template" id="template">
+          <option value="">All checklists</option>
+          {% for tmpl in templates %}<option value="{{ tmpl.id }}" {% if selected_template == tmpl.id|stringformat:'s' %}selected{% endif %}>{{ tmpl.name }} (v{{ tmpl.version }})</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="month" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Month</label>
+        <input type="month" name="month" id="month" value="{{ selected_month }}" style="padding: 0.42rem 0.6rem; border-radius: 6px; border: 1px solid #cbd5d1;">
+      </div>
+      <button class="button secondary" type="submit">Filter</button>
+      {% if selected_site or selected_template or selected_month %}
+        <a class="button secondary" href="{% url 'history' %}">Reset</a>
+      {% endif %}
+    </form>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;">
+      <span style="font-size: 0.8rem; color: #536b63; font-weight: 600;">Full-month export ({{ export_month }}):</span>
+      {% if request.user.is_staff %}
+        <a class="button primary" style="padding: 0.45rem 0.85rem; font-size: 0.85rem;" href="{% url 'export-monthly' 'xlsx' %}?site={{ selected_site }}&template={{ selected_template }}&month={{ export_month }}">Month Excel ↓</a>
+        <a class="button secondary" style="padding: 0.45rem 0.85rem; font-size: 0.85rem;" href="{% url 'export-monthly' 'pdf' %}?site={{ selected_site }}&template={{ selected_template }}&month={{ export_month }}">Month PDF ↓</a>
+      {% elif operator_site %}
+        <a class="button primary" style="padding: 0.45rem 0.85rem; font-size: 0.85rem;" href="{% url 'operator-monthly-export' 'xlsx' %}?template={{ selected_template }}&month={{ export_month }}">Month Excel ↓</a>
+        <a class="button secondary" style="padding: 0.45rem 0.85rem; font-size: 0.85rem;" href="{% url 'operator-monthly-export' 'pdf' %}?template={{ selected_template }}&month={{ export_month }}">Month PDF ↓</a>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<section class="panel"><div class="table-wrap"><table><thead><tr><th>Date</th><th>Checklist</th>{% if request.user.is_staff %}<th>Site</th><th>Submitted by</th>{% endif %}<th>Status Summary</th><th>Time</th><th>Exports</th></tr></thead><tbody>{% for submission in submissions %}<tr><td><strong>{{ submission.checklist_date|date:'d M Y' }}</strong></td><td>{{ submission.template.name }}</td>{% if request.user.is_staff %}<td>{{ submission.site.name }}</td><td>{{ submission.submitted_by.get_full_name|default:submission.submitted_by.username }}</td>{% endif %}<td>{% if submission.choice_summary %}<div style="display:flex;gap:0.35rem;flex-wrap:wrap;"><span class="badge" style="{% if submission.choice_summary.non_operational_count > 0 %}background:#fee2e2;color:#a43d31;{% else %}background:#e8f5ef;color:#18835e;{% endif %}">{{ submission.choice_summary.non_operational_count }} Non-Op / {{ submission.choice_summary.total_items }}</span>{% if submission.choice_summary.spare_count %}<span class="badge" style="background:#fef3c7;color:#92400e;">{{ submission.choice_summary.spare_count }} Spare</span>{% endif %}</div>{% else %}<span class="muted">—</span>{% endif %}</td><td>{{ submission.submitted_at|date:'H:i' }} IST</td><td>{% if request.user.is_staff %}<div class="download-links"><a href="{% url 'export-submission' submission.id 'xlsx' %}">Excel</a><a href="{% url 'export-submission' submission.id 'pdf' %}">PDF</a></div>{% elif submission.submitted_by_id == request.user.id %}<div class="download-links"><a href="{% url 'submission-review' submission.id %}">Review</a><a href="{% url 'operator-excel-review' submission.id %}">Excel</a></div>{% else %}<span class="muted">—</span>{% endif %}</td></tr>{% empty %}<tr><td colspan="7" class="empty">No checklists found.</td></tr>{% endfor %}</tbody></table></div></section>{% endblock %}

@@ -12,6 +12,8 @@ urlpatterns = [
     path("submissions/<int:submission_id>/review/", views.submission_review, name="submission-review"),
     path("submissions/<int:submission_id>/excel/", views.operator_excel_review, name="operator-excel-review"),
     path("history/", views.history, name="history"),
+    path("executive-summary/", views.executive_summary, name="executive-summary"),
+    path("history/export/monthly/<str:file_type>/", views.operator_monthly_export, name="operator-monthly-export"),
     path("admin-settings/", views.admin_settings, name="admin-settings"),
     path("manage/users/", views.manage_users, name="manage-users"),
     path("manage/users/<int:user_id>/edit/", views.edit_user, name="edit-user"),
@@ -24,5 +26,6 @@ urlpatterns = [
     path("manage/checklists/", views.manage_checklists, name="manage-checklists"),
     path("manage/checklists/<int:template_id>/preview/", views.preview_checklist_template, name="preview-checklist-template"),
     path("manage/checklists/<int:template_id>/delete/", views.delete_checklist_template, name="delete-checklist-template"),
+    path("admin/export/monthly/<str:file_type>/", views.export_monthly, name="export-monthly"),
     path("admin/submissions/<int:submission_id>/<str:file_type>/", views.export_submission, name="export-submission"),
 ]

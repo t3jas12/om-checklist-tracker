@@ -103,6 +103,13 @@
             <td>
               <strong>{{ item.template.name }}</strong>
               <small>{{ item.template.items.count }} checkpoints</small>
+              {% if item.choice_summary %}
+                <div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.3rem;">
+                  {% for opt in item.choice_summary.option_counts %}
+                    <span class="badge" style="{% if opt.kind == 'fault' %}background:#fee2e2;color:#a43d31;{% elif opt.kind == 'spare' %}background:#fef3c7;color:#92400e;{% elif opt.kind == 'ok' %}background:#e8f5ef;color:#18835e;{% else %}background:#f1f5f3;color:#334e45;{% endif %}">{{ opt.label }}: {{ opt.count }}</span>
+                  {% endfor %}
+                </div>
+              {% endif %}
             </td>
             <td>
               {% if item.submission %}

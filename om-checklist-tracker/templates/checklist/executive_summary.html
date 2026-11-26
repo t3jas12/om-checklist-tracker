@@ -1,0 +1,65 @@
+{% extends 'base.html' %}
+{% block title %}Executive Summary · O&amp;M{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <div class="eyebrow">EXECUTIVE SUMMARY · {{ today|date:'l, d F Y' }}</div>
+    <h1>Non-operational assets by site</h1>
+    <p>Daily site-by-site breakdown highlighting non-operational strings and abnormal assets across all checklists.</p>
+  </div>
+  <div class="deadline-chip" style="{% if total_non_op > 0 %}border-color:#fca5a5;background:#fef2f2;color:#991b1b;{% endif %}">
+    <span class="pulse" style="{% if total_non_op > 0 %}background:#dc2626;box-shadow:0 0 0 4px #fee2e2;{% endif %}"></span>
+    Non-operational in period: <strong style="{% if total_non_op > 0 %}color:#b91c1c;{% endif %}">{{ total_non_op }}</strong>
+  </div>
+</div>
+
+<div class="stats-grid">
+  <article class="stat-card">
+    <span>Sites reviewed</span>
+    <strong>{{ executive_summaries|length }}</strong>
+    <small>{{ start_date|date:'d M Y' }} – {{ end_date|date:'d M Y' }}</small>
+  </article>
+  <article class="stat-card" style="{% if sites_with_issues > 0 %}border-color:#fca5a5;background:#fff5f5;{% endif %}">
+    <span style="{% if sites_with_issues > 0 %}color:#991b1b;{% endif %}">Sites with non-operational assets</span>
+    <strong style="{% if sites_with_issues > 0 %}color:#dc2626;{% endif %}">{{ sites_with_issues }}</strong>
+    <small>Sites requiring maintenance attention</small>
+  </article>
+  <article class="stat-card" style="{% if total_non_op > 0 %}border-color:#fca5a5;background:#fff5f5;{% endif %}">
+    <span style="{% if total_non_op > 0 %}color:#991b1b;{% endif %}">Total non-operational assets</span>
+    <strong style="{% if total_non_op > 0 %}color:#dc2626;{% endif %}">{{ total_non_op }}</strong>
+    <small>Highlighted in red below per day</small>
+  </article>
+</div>
+
+<section class="panel" style="margin-bottom: 1.5rem; background: #fef2f2; border: 1px solid #fecaca;">
+  <form method="get" style="display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;">
+    <div style="flex: 1; min-width: 190px;">
+      <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Site</label>
+      <select name="site" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid #cbd5d1; background: #fff;">
+        <option value="">All active sites</option>
+        {% for site in all_sites %}
+          <option value="{{ site.id }}" {% if selected_site == site.id|stringformat:'s' %}selected{% endif %}>{{ site.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="min-width: 145px;">
+      <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">From date</label>
+      <input type="date" name="start_date" value="{{ start_date|date:'Y-m-d' }}" style="width: 100%; padding: 0.45rem; border-radius: 6px; border: 1px solid #cbd5d1; background: #fff;">
+    </div>
+    <div style="min-width: 145px;">
+      <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">To date</label>
+      <input type="date" name="end_date" value="{{ end_date|date:'Y-m-d' }}" style="width: 100%; padding: 0.45rem; border-radius: 6px; border: 1px solid #cbd5d1; background: #fff;">
+    </div>
+    <div>
+      <button class="button primary" style="padding: 0.5rem 1.15rem;" type="submit">Filter</button>
+    </div>
+    <div style="display: flex; gap: 0.45rem; flex-wrap: wrap; align-self: flex-end;">
+      <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?site={{ selected_site }}&start_date={{ today|date:'Y-m-d' }}&end_date={{ today|date:'Y-m-d' }}">Today</a>
+      <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?site={{ selected_site }}&month={{ current_month_str }}">This month</a>
+      <a class="button secondary" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;" href="?site={{ selected_site }}&all_days=1">All days</a>
+    </div>
+  </form>
+</section>
+
+{% include 'checklist/_executive_site_cards.html' with executive_list=executive_summaries %}
+{% endblock %}

@@ -477,4 +477,502 @@ class ChecklistWorkflowTests(TestCase):
         self.assertTrue(admin.check_password("strong-admin-password"))
 
 
+class ElevenKVAndMonthlyExportTests(TestCase):
+    SAMPLE_11KV_CSV = """\
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,Document No. TEIPL/11KVEQUIPMENT,,,,,"Talf Energy India Pvt Ltd, Jhatikara DL9",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,Equipment Name : 11 KV Equipment Control Panel & LT Panel,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Section,,"Check 
+point no.",Job Description,Standard,"Method/
+Tool",Frequency,Month-,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,31,31
+Control room,HT panel(11Kv),1,Check current in all phases on 11kv HT panel,It should be balanced in all the phases,,D,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,2,Check voltage between all phases on 11kv HT Panel( RY/YB/BR),It should be balanced in all phases ( value notedown ),,D,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,3, Check annunciation on 11kv HT panel,Must be healthy,,D,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,4,Breaker healthy indication on 11kv HT panel,Must be healthy,,D,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,5, Check DC/AC supply status on 11kv HT panel,Must be healthy,,D,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,6,Check VCB spring charge indication on 11kv HT panel,Must be healthy,,D,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,7,Check MFM reading on 11kv HT panel,Reading must be visual/ appropriate,,D,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,LT panel(800 Vac),8,Check AC breaker (MCCB) status,Must be healthy,,D,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,9,Check AC supply indication lamp,Must be glowing,,D,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,10,Check AC SPD status,Must be healthy,,D,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,11,Check panel physical healthness condition,Door handle/door look must be in working condition and rustfree.,,D,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,12,Check panel earthing connection,Confirm with match marking,,D,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,13,Panel surrounding area,Should be clean,,D,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Legends,,,,Signature,Checked & done by,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+ IF OK :                   ,,,,,Verify by,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+ IF NOT OK : ,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+ D - Daily,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+ W - Weekly,,,,Note : If Found abnormal inform Maintenance Department.,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+"""
+
+    def setUp(self):
+        self.site = Site.objects.create(name="Jhatikara Site", company="Talf Energy India Pvt Ltd, Jhatikara DL9")
+        self.admin = User.objects.create_superuser(username="admin", password="strong-admin-password")
+        self.operator = User.objects.create_user(username="op1", password="secure-test-password")
+        UserSite.objects.create(user=self.operator, site=self.site)
+
+    def test_upload_11kv_csv_parses_metadata_subsections_and_answer_types(self):
+        self.client.force_login(self.admin)
+        upload = SimpleUploadedFile("11kv_equipment.csv", self.SAMPLE_11KV_CSV.encode("utf-8"), content_type="text/csv")
+        response = self.client.post("/manage/checklists/", {
+            "template_name": "11 KV Equipment Control Panel",
+            "file": upload,
+            "assign_to_sites": [self.site.pk],
+        })
+        template = ChecklistTemplate.objects.get(name="11 KV Equipment Control Panel")
+        self.assertRedirects(response, f"/manage/checklists/{template.pk}/preview/")
+        self.assertEqual(template.document_number, "TEIPL/11KVEQUIPMENT")
+        self.assertEqual(template.company, "Talf Energy India Pvt Ltd, Jhatikara DL9")
+        self.assertEqual(template.equipment_name, "11 KV Equipment Control Panel & LT Panel")
+        self.assertEqual(template.items.count(), 13)
+
+        cp1 = template.items.get(checkpoint_no=1)
+        cp2 = template.items.get(checkpoint_no=2)
+        cp8 = template.items.get(checkpoint_no=8)
+        cp13 = template.items.get(checkpoint_no=13)
+        self.assertEqual(cp1.section, "Control room — HT panel(11Kv)")
+        self.assertEqual(cp1.answer_type, ChecklistItem.AnswerType.BOOLEAN)
+        self.assertEqual(cp1.frequency, "Daily")
+        self.assertEqual(cp2.section, "Control room — HT panel(11Kv)")
+        self.assertEqual(cp2.answer_type, ChecklistItem.AnswerType.TEXT)
+        self.assertEqual(cp8.section, "Control room — LT panel(800 Vac)")
+        self.assertEqual(cp8.answer_type, ChecklistItem.AnswerType.BOOLEAN)
+        self.assertEqual(cp13.answer_type, ChecklistItem.AnswerType.BOOLEAN)
+
+    def test_monthly_excel_and_pdf_export_combines_all_days_in_month_matrix(self):
+        from checklist.services.workbook_import import import_uploaded_csv
+
+        template, count = import_uploaded_csv(
+            SimpleUploadedFile("11kv.csv", self.SAMPLE_11KV_CSV.encode("utf-8")),
+            "11 KV Equipment",
+        )
+        self.assertEqual(count, 13)
+        SiteChecklist.objects.create(site=self.site, template=template, position=1)
+
+        items = list(template.items.order_by("checkpoint_no"))
+        for day_num, voltage_val, status_val in [(1, "11.1/11.0/11.1", "YES"), (15, "11.0/11.0/11.0", "YES"), (30, "10.9/11.0/11.1", "NO")]:
+            sub = Submission.objects.create(
+                site=self.site,
+                template=template,
+                submitted_by=self.operator,
+                checklist_date=date(2026, 11, day_num),
+                remarks=f"Day {day_num} check",
+                signer_name="Operator One",
+            )
+            for item in items:
+                val = voltage_val if item.checkpoint_no == 2 else (status_val if item.checkpoint_no == 1 else "YES")
+                comment = "Phase imbalance noticed" if (day_num == 30 and item.checkpoint_no == 1) else ""
+                Answer.objects.create(submission=sub, item=item, value=val, comment=comment)
+
+        self.client.force_login(self.admin)
+        xlsx_resp = self.client.get(f"/admin/export/monthly/xlsx/?site={self.site.pk}&month=2026-11")
+        self.assertEqual(xlsx_resp.status_code, 200)
+        self.assertEqual(xlsx_resp["Content-Type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        wb = load_workbook(BytesIO(xlsx_resp.content), data_only=True)
+        self.assertIn("11 KV Equipment", wb.sheetnames)
+        self.assertIn("Comments & Remarks", wb.sheetnames)
+
+        ws = wb["11 KV Equipment"]
+        # Row 5 has day numbers starting at col 8 (H) because 7 metadata cols exist (Section + Sub-section + 5)
+        self.assertEqual(ws.cell(5, 8).value, 1)
+        self.assertEqual(ws.cell(5, 22).value, 15)
+        self.assertEqual(ws.cell(5, 37).value, 30)
+        # Row 6 = CP 1, Row 7 = CP 2
+        self.assertEqual(ws.cell(6, 8).value, "YES")
+        self.assertEqual(ws.cell(6, 37).value, "NO")
+        self.assertEqual(ws.cell(7, 8).value, "11.1/11.0/11.1")
+        self.assertEqual(ws.cell(7, 22).value, "11.0/11.0/11.0")
+        self.assertEqual(ws.cell(7, 37).value, "10.9/11.0/11.1")
+
+        pdf_resp = self.client.get(f"/admin/export/monthly/pdf/?site={self.site.pk}&month=2026-11")
+        self.assertEqual(pdf_resp.status_code, 200)
+        self.assertEqual(pdf_resp["Content-Type"], "application/pdf")
+        self.assertTrue(pdf_resp.content.startswith(b"%PDF"))
+
+    def test_operator_can_export_own_site_monthly_but_not_other_site(self):
+        other_site = Site.objects.create(name="Other Site")
+        template = ChecklistTemplate.objects.create(name="11 KV Test", version=1)
+        item = ChecklistItem.objects.create(template=template, checkpoint_no=1, description="Status", answer_type="boolean", position=1)
+        sub = Submission.objects.create(site=self.site, template=template, submitted_by=self.operator, checklist_date=date(2026, 11, 5))
+        Answer.objects.create(submission=sub, item=item, value="YES")
+
+        self.client.force_login(self.operator)
+        ok_xlsx = self.client.get("/history/export/monthly/xlsx/?month=2026-11")
+        self.assertEqual(ok_xlsx.status_code, 200)
+        ok_pdf = self.client.get("/history/export/monthly/pdf/?month=2026-11")
+        self.assertEqual(ok_pdf.status_code, 200)
+        forbidden = self.client.get(f"/history/export/monthly/xlsx/?site={other_site.pk}&month=2026-11")
+        self.assertEqual(forbidden.status_code, 403)
+        admin_only = self.client.get(f"/admin/export/monthly/xlsx/?site={self.site.pk}&month=2026-11")
+        self.assertEqual(admin_only.status_code, 302)
+
+    def test_empty_monthly_export_redirects_with_warning(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(f"/admin/export/monthly/xlsx/?site={self.site.pk}&month=2026-01")
+        self.assertEqual(resp.status_code, 302)
+
+
+class WmsChecklistDynamicDropdownTests(TestCase):
+    SAMPLE_WMS_CSV = """\
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,Document No. WMS/CHECKLIST,,"Talf Energy India Pvt Ltd, Jhatikara DL9",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,"Equipment Name:  WMS, SCADA & CCTV ",,,,,,,,,,,,,,,,,,,,,,Approved By :  ,,,,,,,,
+Section,"Check 
+point no.",Job Description,Standard,"Method/
+Tool",Month-,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,11.0,12.0,13.0,14.0,15.0,16.0,17.0,18.0,19.0,20.0,21.0,22.0,23.0,24.0,25.0,26.0,27.0,28.0,29.0,30.0,31.0
+WMS,1.0,Cleaning of Pyranometer ,It should be clean,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,2.0,"Visual inspection of Pyranometer,Temperature sensor,SCADA system",no damage and dirt found,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Cleaning of  Module,3.0,Cleaning of Module,It should be clean ,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,4.0, Module   cleaning cycle ,clean date (check ok only when cleaning done),,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+SCADA System,5.0,Inverter AC/DC KW Communication,Values must be visible on SCADA Portal,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,6.0,WMS to SCADA portal data communication,No sign of communication Failure,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,7.0,All Data Report Should be recorded properly,No sign of communication Failure/ Malfunctioning,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,8.0,Alarm/Event/Trend data recording of inverter,No sign of communication Failure/ Malfunctioning,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Battary Bank,9.0,Visual inspection of Battery ,"No any sign of any leakage, cracks, corrosion",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+CCTV Camera,10.0,visual inspection of camera display screen,should be all CCTV camera funtional ok,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,11.0,inspection of storage data of all CCTV cameras,Data must be store in DVR Storage drive,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Auxiliary supply panel,12.0,Check auxiliary supply panel,should be in working condtion no any sign of failure,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,13.0,Check supply to PV Area lighting pole,should be all light of PV area in working condition,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,14.0,check indication lamp ,should be Glowing ,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Remarks:,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Legends:,,,Signature,check & done by,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+ IF OK :                   ,,,,verify by,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+ IF NOT OK : ,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+ D - Daily,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+ W - Weekly,,,Note : If Found abnormal inform Maintenance Department.,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+"""
+
+    def setUp(self):
+        self.site = Site.objects.create(name="Jhatikara Site", company="Talf Energy India Pvt Ltd, Jhatikara DL9")
+        self.admin = User.objects.create_superuser(username="admin", password="strong-admin-password")
+        self.operator = User.objects.create_user(username="op_wms", password="secure-test-password")
+        UserSite.objects.create(user=self.operator, site=self.site)
+        settings = GlobalSettings.get_solo()
+        settings.deadline = time(23, 59)
+        settings.save()
+
+    def _build_wms_workbook_bytes(self):
+        import csv
+        import io
+        from openpyxl.worksheet.datavalidation import DataValidation
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "WMS"
+        for row in csv.reader(io.StringIO(self.SAMPLE_WMS_CSV)):
+            ws.append(row)
+
+        lists_ws = wb.create_sheet("Lists")
+        lists_ws["A1"] = "Operational"
+        lists_ws["A2"] = "Non Operational"
+        lists_ws["A3"] = "Spare"
+
+        # Default dropdown on all day cells F7:AJ20
+        dv_default = DataValidation(type="list", formula1='"OK,Not OK"', allow_blank=True)
+        dv_default.sqref = "F7:AJ20"
+        ws.add_data_validation(dv_default)
+
+        # Row-specific override on CP 4 (row 10): cleaning cycle dropdown
+        dv_cycle = DataValidation(type="list", formula1='"Done,Pending,N/A"', allow_blank=True)
+        dv_cycle.sqref = "F10:AJ10"
+        ws.add_data_validation(dv_cycle)
+
+        # Cross-sheet range reference on CP 9 (row 15): Battery bank status
+        dv_battery = DataValidation(type="list", formula1="=Lists!$A$1:$A$3", allow_blank=True)
+        dv_battery.sqref = "F15:AJ15"
+        ws.add_data_validation(dv_battery)
+
+        buf = BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    def test_wms_csv_import_handles_temperature_sensor_and_all_14_items(self):
+        self.client.force_login(self.admin)
+        upload = SimpleUploadedFile("wms.csv", self.SAMPLE_WMS_CSV.encode("utf-8"), content_type="text/csv")
+        resp = self.client.post("/manage/checklists/", {
+            "template_name": "WMS Checklist",
+            "file": upload,
+            "assign_to_sites": [self.site.pk],
+        })
+        tmpl = ChecklistTemplate.objects.get(name="WMS Checklist")
+        self.assertRedirects(resp, f"/manage/checklists/{tmpl.pk}/preview/")
+        self.assertEqual(tmpl.document_number, "WMS/CHECKLIST")
+        self.assertEqual(tmpl.equipment_name, "WMS, SCADA & CCTV")
+        self.assertEqual(tmpl.items.count(), 14)
+
+        cp2 = tmpl.items.get(checkpoint_no=2)
+        self.assertEqual(cp2.answer_type, ChecklistItem.AnswerType.BOOLEAN)
+        self.assertEqual(cp2.unit, "")
+
+    def test_wms_excel_detects_cell_and_cross_sheet_dropdowns_and_exports_daily_and_monthly(self):
+        self.client.force_login(self.admin)
+        xlsx_bytes = self._build_wms_workbook_bytes()
+        upload = SimpleUploadedFile(
+            "wms.xlsx",
+            xlsx_bytes,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.client.post("/manage/checklists/", {
+            "template_name": "WMS Checklist Excel",
+            "file": upload,
+            "assign_to_sites": [self.site.pk],
+        })
+        tmpl = ChecklistTemplate.objects.get(name="WMS Checklist Excel")
+        self.assertEqual(tmpl.items.count(), 14)
+
+        cp1 = tmpl.items.get(checkpoint_no=1)
+        cp2 = tmpl.items.get(checkpoint_no=2)
+        cp4 = tmpl.items.get(checkpoint_no=4)
+        cp9 = tmpl.items.get(checkpoint_no=9)
+        self.assertEqual(cp1.answer_type, ChecklistItem.AnswerType.CHOICES)
+        self.assertEqual(cp1.get_choices_list(), ["OK", "Not OK"])
+        self.assertEqual(cp2.answer_type, ChecklistItem.AnswerType.CHOICES)
+        self.assertEqual(cp4.get_choices_list(), ["Done", "Pending", "N/A"])
+        self.assertEqual(cp9.get_choices_list(), ["Operational", "Non Operational", "Spare"])
+
+        # Operator sees dynamic dropdown options and submits daily checklist
+        self.client.force_login(self.operator)
+        form_resp = self.client.get(f"/checklist/?template_id={tmpl.pk}")
+        self.assertEqual(form_resp.status_code, 200)
+        self.assertContains(form_resp, '<option value="Done"')
+        self.assertContains(form_resp, '<option value="Operational"')
+        self.assertContains(form_resp, "WMS/CHECKLIST")
+
+        post_data = {"template_id": tmpl.pk, "remarks": "All WMS systems checked"}
+        for it in tmpl.items.all():
+            if it.checkpoint_no == 4:
+                post_data[f"item_{it.id}"] = "Done"
+            elif it.checkpoint_no == 9:
+                post_data[f"item_{it.id}"] = "Operational"
+            else:
+                post_data[f"item_{it.id}"] = "OK"
+
+        preview_resp = self.client.post("/checklist/", post_data)
+        self.assertEqual(preview_resp.status_code, 200)
+        lockin_resp = self.client.post("/checklist/finalize/", {"template_id": tmpl.pk, "confirm_lockin": "yes"})
+        sub = Submission.objects.get(site=self.site, template=tmpl)
+        self.assertRedirects(lockin_resp, f"/submissions/{sub.pk}/review/")
+
+        # Daily Excel + PDF exports
+        self.client.force_login(self.admin)
+        daily_xlsx = self.client.get(f"/admin/submissions/{sub.pk}/xlsx/")
+        self.assertEqual(daily_xlsx.status_code, 200)
+        dwb = load_workbook(BytesIO(daily_xlsx.content), data_only=False)
+        dws = dwb["WMS Checklist Excel"]
+        self.assertGreaterEqual(len(dws.data_validations.dataValidation), 14)
+
+        daily_pdf = self.client.get(f"/admin/submissions/{sub.pk}/pdf/")
+        self.assertEqual(daily_pdf.status_code, 200)
+        self.assertTrue(daily_pdf.content.startswith(b"%PDF"))
+
+        # Monthly Excel + PDF exports
+        month_str = sub.checklist_date.strftime("%Y-%m")
+        monthly_xlsx = self.client.get(f"/admin/export/monthly/xlsx/?site={self.site.pk}&month={month_str}")
+        self.assertEqual(monthly_xlsx.status_code, 200)
+        mwb = load_workbook(BytesIO(monthly_xlsx.content), data_only=False)
+        mws = mwb["WMS Checklist Excel"]
+        day_col = 6 + sub.checklist_date.day  # 6 meta cols + day (1-indexed)
+        self.assertEqual(mws.cell(6, day_col).value, "OK")
+        self.assertEqual(mws.cell(9, day_col).value, "Done")
+        self.assertEqual(mws.cell(14, day_col).value, "Operational")
+        self.assertGreaterEqual(len(mws.data_validations.dataValidation), 14)
+
+        monthly_pdf = self.client.get(f"/admin/export/monthly/pdf/?site={self.site.pk}&month={month_str}")
+        self.assertEqual(monthly_pdf.status_code, 200)
+        self.assertTrue(monthly_pdf.content.startswith(b"%PDF"))
+
+    def test_upload_legacy_xls_and_misnamed_csv_do_not_raise_badzipfile(self):
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        self.client.force_login(self.admin)
+
+        # 1. CSV content uploaded with .xlsx extension (common cause of BadZipFile)
+        misnamed = SimpleUploadedFile(
+            "wms_misnamed.xlsx",
+            self.SAMPLE_WMS_CSV.encode("utf-8"),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        resp_csv = self.client.post("/manage/checklists/", {
+            "template_name": "WMS Misnamed CSV",
+            "file": misnamed,
+        })
+        tmpl_csv = ChecklistTemplate.objects.get(name="WMS Misnamed CSV")
+        self.assertRedirects(resp_csv, f"/manage/checklists/{tmpl_csv.pk}/preview/")
+        self.assertEqual(tmpl_csv.items.count(), 14)
+
+        # 2. Genuine legacy binary .xls file (OLE2) converted via LibreOffice with dropdowns intact
+        xlsx_bytes = self._build_wms_workbook_bytes()
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            src = p / "wms.xlsx"
+            src.write_bytes(xlsx_bytes)
+            subprocess.run(
+                ["soffice", "--headless", "--norestore", "--convert-to", "xls", "--outdir", str(p), str(src)],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            xls_bytes = (p / "wms.xls").read_bytes()
+
+        xls_upload = SimpleUploadedFile("wms_legacy.xls", xls_bytes, content_type="application/vnd.ms-excel")
+        resp_xls = self.client.post("/manage/checklists/", {
+            "template_name": "WMS Legacy XLS",
+            "file": xls_upload,
+        })
+        tmpl_xls = ChecklistTemplate.objects.get(name="WMS Legacy XLS")
+        self.assertRedirects(resp_xls, f"/manage/checklists/{tmpl_xls.pk}/preview/")
+        self.assertEqual(tmpl_xls.items.count(), 14)
+        self.assertEqual(tmpl_xls.items.get(checkpoint_no=4).get_choices_list(), ["Done", "Pending", "N/A"])
+
+
+class InverterStringSummaryTests(TestCase):
+    def setUp(self):
+        self.site = Site.objects.create(name="dhansa")
+        self.admin = User.objects.create_superuser(username="admin", password="strong-admin-password")
+        self.operator = User.objects.create_user(username="op_dhansa", password="secure-test-password")
+        UserSite.objects.create(user=self.operator, site=self.site)
+        self.inv3 = ChecklistTemplate.objects.create(name="inv3", version=1)
+        self.items = [
+            ChecklistItem.objects.create(
+                template=self.inv3,
+                section="Inverter 1",
+                checkpoint_no=i,
+                description=f"PV{i} - Status Check",
+                answer_type=ChecklistItem.AnswerType.CHOICES,
+                choices="Operational, Non-Operational, Spare",
+                position=i,
+            )
+            for i in range(1, 7)
+        ]
+
+    def test_non_operational_string_count_for_day_inverter_and_site(self):
+        target_day = date(2026, 11, 25)
+        sub = Submission.objects.create(
+            site=self.site,
+            template=self.inv3,
+            submitted_by=self.operator,
+            checklist_date=target_day,
+        )
+        # PV1, PV4 -> Operational (2); PV3, PV6 -> Non-Operational (2); PV2, PV5 -> Spare (2)
+        vals = ["Operational", "Spare", "Non-Operational", "Operational", "Spare", "Non-Operational"]
+        for item, val in zip(self.items, vals):
+            Answer.objects.create(submission=sub, item=item, value=val)
+
+        # Submission review (operator/admin)
+        self.client.force_login(self.operator)
+        review_resp = self.client.get(f"/submissions/{sub.pk}/review/")
+        self.assertEqual(review_resp.status_code, 200)
+        self.assertContains(review_resp, "Non-Operational (2):")
+        self.assertContains(review_resp, "PV3, PV6")
+
+        # History
+        hist_resp = self.client.get("/history/")
+        self.assertEqual(hist_resp.status_code, 200)
+        self.assertContains(hist_resp, "2 Non-Op / 6")
+        self.assertContains(hist_resp, "2 Spare")
+
+        # Admin Review tab filtered by site + inverter + day
+        self.client.force_login(self.admin)
+        dash_review = self.client.get(
+            f"/?tab=review&site={self.site.pk}&template={self.inv3.pk}&start_date=2026-11-25&end_date=2026-11-25"
+        )
+        self.assertEqual(dash_review.status_code, 200)
+        self.assertContains(dash_review, "Inverter / String Status Summary")
+        self.assertContains(dash_review, "Total Non-Operational: 2")
+        self.assertContains(dash_review, "2 / 6")
+        self.assertContains(dash_review, "PV3, PV6")
+
+        # Monthly Excel includes dynamic daily count rows
+        xlsx_resp = self.client.get(f"/admin/export/monthly/xlsx/?site={self.site.pk}&template={self.inv3.pk}&month=2026-11")
+        self.assertEqual(xlsx_resp.status_code, 200)
+        wb = load_workbook(BytesIO(xlsx_resp.content), data_only=True)
+        ws = wb["inv3"]
+        day_col = 6 + 25  # 6 meta cols + day 25
+        # Rows 6..11 = 6 PV items; Rows 12, 13, 14 = Operational Count, Non-Operational Count, Spare Count
+        self.assertEqual(ws.cell(12, 3).value, "Operational Count")
+        self.assertEqual(ws.cell(12, day_col).value, 2)
+        self.assertEqual(ws.cell(13, 3).value, "Non-Operational Count")
+        self.assertEqual(ws.cell(13, day_col).value, 2)
+        self.assertEqual(ws.cell(14, 3).value, "Spare Count")
+        self.assertEqual(ws.cell(14, day_col).value, 2)
+
+    def test_executive_summary_shows_per_site_daily_non_operational_assets_in_red(self):
+        other_site = Site.objects.create(name="Jhatikara")
+        sub_day1 = Submission.objects.create(
+            site=self.site,
+            template=self.inv3,
+            submitted_by=self.operator,
+            checklist_date=date(2026, 11, 24),
+        )
+        for item, val in zip(self.items, ["Operational"] * 6):
+            Answer.objects.create(submission=sub_day1, item=item, value=val)
+
+        sub_day2 = Submission.objects.create(
+            site=self.site,
+            template=self.inv3,
+            submitted_by=self.operator,
+            checklist_date=date(2026, 11, 25),
+        )
+        for item, val in zip(
+            self.items,
+            ["Operational", "Spare", "Non-Operational", "Operational", "Spare", "Non-Operational"],
+        ):
+            Answer.objects.create(submission=sub_day2, item=item, value=val, comment="Faulty string" if val == "Non-Operational" else "")
+
+        self.client.force_login(self.admin)
+
+        # 1. Dedicated top-level /executive-summary/ page across all sites and days
+        exec_resp = self.client.get("/executive-summary/?start_date=2026-11-24&end_date=2026-11-25")
+        self.assertEqual(exec_resp.status_code, 200)
+        self.assertContains(exec_resp, "dhansa")
+        self.assertContains(exec_resp, "Jhatikara")
+        self.assertContains(exec_resp, "2 Non-Operational Assets")
+        self.assertContains(exec_resp, "PV3")
+        self.assertContains(exec_resp, "PV6")
+        self.assertContains(exec_resp, "#dc2626")  # red highlight
+        self.assertContains(exec_resp, "All submitted assets operational")  # day 24 clean
+
+        # 2. Dashboard stays clean (no Executive Summary section rendered on Dashboard) and top nav shows link
+        with patch("checklist.views.timezone.localdate", return_value=date(2026, 11, 25)):
+            status_resp = self.client.get("/")
+        self.assertEqual(status_resp.status_code, 200)
+        self.assertContains(status_resp, 'href="/executive-summary/"')
+        self.assertNotContains(status_resp, "Executive Summary — Non-Operational Assets by Site")
+
+        # 3. Non-staff operator & anonymous users cannot see or access /executive-summary/
+        self.client.force_login(self.operator)
+        op_dash = self.client.get("/")
+        self.assertEqual(op_dash.status_code, 200)
+        self.assertNotContains(op_dash, "Executive Summary")
+        self.assertNotContains(op_dash, "/executive-summary/")
+        op_hist = self.client.get("/history/")
+        self.assertEqual(op_hist.status_code, 200)
+        self.assertNotContains(op_hist, "/executive-summary/")
+        op_resp = self.client.get("/executive-summary/")
+        self.assertEqual(op_resp.status_code, 302)
+        self.client.logout()
+        anon_resp = self.client.get("/executive-summary/")
+        self.assertEqual(anon_resp.status_code, 302)
+        self.client.force_login(self.admin)
+
+        # 4. Edit site page includes per-site Executive Summary
+        site_resp = self.client.get(f"/manage/sites/{self.site.pk}/edit/")
+        self.assertEqual(site_resp.status_code, 200)
+        self.assertContains(site_resp, "Executive Summary — Daily Non-Operational Assets (dhansa)")
+        self.assertContains(site_resp, "PV3")
+        self.assertContains(site_resp, "PV6")
+
+
+
+
+
+
+
 

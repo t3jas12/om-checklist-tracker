@@ -29,8 +29,8 @@ class EquipmentForm(forms.ModelForm):
 
 
 class ChecklistUploadForm(forms.Form):
-    template_name = forms.CharField(max_length=160, label="Checklist name", widget=forms.TextInput(attrs={"placeholder": "e.g. Inverter Daily Inspection"}))
-    file = forms.FileField(label="Checklist file (Excel .xlsx or PDF)")
+    template_name = forms.CharField(max_length=160, label="Checklist name", widget=forms.TextInput(attrs={"placeholder": "e.g. 11 KV Equipment Control Panel"}))
+    file = forms.FileField(label="Checklist file (Excel .xlsx, CSV .csv, or PDF)")
     assign_to_sites = forms.ModelMultipleChoiceField(
         queryset=Site.objects.filter(active=True).order_by("name"),
         required=False,
@@ -41,8 +41,8 @@ class ChecklistUploadForm(forms.Form):
     def clean_file(self):
         f = self.cleaned_data["file"]
         name = f.name.lower()
-        if not (name.endswith(".xlsx") or name.endswith(".xls") or name.endswith(".pdf")):
-            raise forms.ValidationError("Only .xlsx, .xls, or .pdf files are accepted.")
+        if not (name.endswith(".xlsx") or name.endswith(".xls") or name.endswith(".csv") or name.endswith(".pdf")):
+            raise forms.ValidationError("Only .xlsx, .xls, .csv, or .pdf files are accepted.")
         return f
 
 

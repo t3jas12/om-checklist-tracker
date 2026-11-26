@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta
+import calendar
+from datetime import date, datetime, timedelta
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model, update_session_auth_hash
@@ -30,8 +31,9 @@ from .models import (
     Submission,
     UserSite,
 )
-from .services.exports import excel_response, pdf_response
-from .services.workbook_import import import_uploaded_excel, import_uploaded_pdf
+from .services.exports import excel_response, pdf_response, range_excel_response, range_pdf_response
+from .services.summary import build_executive_summary, summarize_submission_choices
+from .services.workbook_import import import_uploaded_csv, import_uploaded_excel, import_uploaded_pdf
 
 User = get_user_model()
 
@@ -81,6 +83,73 @@ def _preview_rows(items, values):
     return [{"item": item, **values.get(str(item.id), {"value": "", "comment": ""})} for item in items]
 
 
+def _parse_filter_dates(request, default_start, default_end):
+    month_start = default_end.replace(day=1)
+    month_end = default_end.replace(day=calendar.monthrange(default_end.year, default_end.month)[1])
+    if request.GET.get("all_days") == "1":
+        earliest = Submission.objects.order_by("checklist_date").values_list("checklist_date", flat=True).first()
+        start_date = earliest or month_start
+        end_date = default_end
+    elif request.GET.get("month", "").strip():
+        try:
+            m_dt = datetime.strptime(request.GET.get("month", "").strip(), "%Y-%m").date()
+            start_date = m_dt.replace(day=1)
+            end_date = m_dt.replace(day=calendar.monthrange(m_dt.year, m_dt.month)[1])
+        except ValueError:
+            start_date, end_date = month_start, month_end
+    else:
+        start_str = request.GET.get("start_date", "").strip()
+        end_str = request.GET.get("end_date", "").strip()
+        try:
+            start_date = datetime.strptime(start_str, "%Y-%m-%d").date() if start_str else default_start
+        except ValueError:
+            start_date = default_start
+        try:
+            end_date = datetime.strptime(end_str, "%Y-%m-%d").date() if end_str else default_end
+        except ValueError:
+            end_date = default_end
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+    return start_date, end_date
+
+
+@login_required
+@user_passes_test(is_admin)
+def executive_summary(request):
+    today = timezone.localdate()
+    month_start = today.replace(day=1)
+    all_sites = list(Site.objects.filter(active=True).order_by("name"))
+    site_id = request.GET.get("site", "").strip()
+    start_date, end_date = _parse_filter_dates(request, month_start, today)
+
+    qs = (
+        Submission.objects.filter(checklist_date__range=[start_date, end_date])
+        .select_related("site", "template", "submitted_by")
+        .prefetch_related("answers__item")
+        .order_by("-checklist_date", "site__name", "-submitted_at")
+    )
+    if site_id:
+        qs = qs.filter(site_id=site_id)
+
+    submissions = list(qs)
+    target_sites = [s for s in all_sites if str(s.pk) == site_id] if site_id else all_sites
+    executive_summaries = build_executive_summary(submissions, sites=target_sites)
+    total_non_op = sum(item["total_non_operational"] for item in executive_summaries)
+    sites_with_issues = sum(1 for item in executive_summaries if item["total_non_operational"] > 0)
+
+    return render(request, "checklist/executive_summary.html", {
+        "today": today,
+        "all_sites": all_sites,
+        "selected_site": site_id,
+        "start_date": start_date,
+        "end_date": end_date,
+        "current_month_str": today.strftime("%Y-%m"),
+        "executive_summaries": executive_summaries,
+        "total_non_op": total_non_op,
+        "sites_with_issues": sites_with_issues,
+    })
+
+
 @login_required
 def dashboard(request):
     today = timezone.localdate()
@@ -89,9 +158,14 @@ def dashboard(request):
         all_sites = Site.objects.filter(active=True).prefetch_related("checklists__template", "equipment", "user_assignment__user").order_by("name")
 
         # Today's status tab data
-        today_submissions = list(Submission.objects.filter(checklist_date=today).select_related("site", "template", "submitted_by"))
+        today_submissions = list(
+            Submission.objects.filter(checklist_date=today)
+            .select_related("site", "template", "submitted_by")
+            .prefetch_related("answers__item")
+        )
         site_submissions = {}
         for s in today_submissions:
+            s.choice_summary = summarize_submission_choices(s, list(s.answers.all()))
             site_submissions.setdefault(s.site_id, []).append(s)
 
         rows = []
@@ -101,6 +175,8 @@ def dashboard(request):
             total_req = len(assigned_checklists) if assigned_checklists else 1
             completed_count = len(subs)
             is_complete = completed_count >= total_req if assigned_checklists else (completed_count > 0)
+            choice_subs = [s for s in subs if s.choice_summary]
+            non_op_today = sum(s.choice_summary["non_operational_count"] for s in choice_subs)
             rows.append({
                 "site": site,
                 "submissions": subs,
@@ -109,28 +185,33 @@ def dashboard(request):
                 "completed_count": completed_count,
                 "total_required": total_req,
                 "is_complete": is_complete,
+                "choice_subs": choice_subs,
+                "non_op_today": non_op_today,
             })
 
         # Inline review tab data
         review_site_id = request.GET.get("site", "")
-        start_date_str = request.GET.get("start_date", "")
-        end_date_str = request.GET.get("end_date", "")
-
-        try:
-            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date() if start_date_str else today
-        except ValueError:
-            start_date = today
-
-        try:
-            end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date() if end_date_str else today
-        except ValueError:
-            end_date = today
+        review_template_id = request.GET.get("template", "")
+        month_start = today.replace(day=1)
+        month_end = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+        start_date, end_date = _parse_filter_dates(request, today, today)
 
         review_qs = Submission.objects.filter(checklist_date__range=[start_date, end_date]).select_related("site", "template", "submitted_by").prefetch_related("answers__item").order_by("-checklist_date", "site__name", "-submitted_at")
         if review_site_id:
             review_qs = review_qs.filter(site_id=review_site_id)
+        if review_template_id:
+            review_qs = review_qs.filter(template_id=review_template_id)
 
         review_submissions = list(review_qs)
+        string_summary_subs = []
+        total_non_operational = 0
+        for sub in review_submissions:
+            sub.choice_summary = summarize_submission_choices(sub, list(sub.answers.all()))
+            if sub.choice_summary:
+                string_summary_subs.append(sub)
+                total_non_operational += sub.choice_summary["non_operational_count"]
+
+        all_templates = ChecklistTemplate.objects.filter(active=True).order_by("name", "-version")
 
         return render(request, "checklist/admin_dashboard.html", {
             "rows": rows,
@@ -138,10 +219,17 @@ def dashboard(request):
             "deadline": GlobalSettings.get_solo().deadline,
             "active_tab": active_tab,
             "all_sites": all_sites,
+            "all_templates": all_templates,
             "review_site_id": review_site_id,
+            "review_template_id": review_template_id,
             "start_date": start_date,
             "end_date": end_date,
+            "month_start": month_start,
+            "month_end": month_end,
+            "current_month_str": today.strftime("%Y-%m"),
             "review_submissions": review_submissions,
+            "string_summary_subs": string_summary_subs,
+            "total_non_operational": total_non_operational,
         })
 
     # Operator dashboard
@@ -149,6 +237,9 @@ def dashboard(request):
     if site is None:
         return render(request, "checklist/no_site.html")
     checklist_status_list = _checklist_options_for_site(site, today)
+    for item in checklist_status_list:
+        sub = item.get("submission")
+        item["choice_summary"] = summarize_submission_choices(sub) if sub else None
     eligible_templates = [item["template"] for item in checklist_status_list if item["available"]]
     next_template = eligible_templates[0] if eligible_templates else None
     all_done = bool(checklist_status_list) and all(item["submission"] is not None for item in checklist_status_list)
@@ -422,7 +513,12 @@ def submission_review(request, submission_id):
     if not (request.user.is_staff or (submission.submitted_by_id == request.user.id and not request.user.is_staff)):
         raise PermissionDenied
     answers = list(submission.answers.select_related("item").order_by("item__position", "item__checkpoint_no"))
-    return render(request, "checklist/submission_review.html", {"submission": submission, "answers": answers})
+    choice_summary = summarize_submission_choices(submission, answers)
+    return render(request, "checklist/submission_review.html", {
+        "submission": submission,
+        "answers": answers,
+        "choice_summary": choice_summary,
+    })
 
 
 @login_required
@@ -433,18 +529,119 @@ def operator_excel_review(request, submission_id):
     return excel_response(submission)
 
 
+def _resolve_export_date_range(request):
+    today = timezone.localdate()
+    month_str = request.GET.get("month", "").strip()
+    start_str = request.GET.get("start_date", "").strip()
+    end_str = request.GET.get("end_date", "").strip()
+
+    if month_str:
+        try:
+            m_dt = datetime.strptime(month_str, "%Y-%m").date()
+            start_date = m_dt.replace(day=1)
+            end_date = m_dt.replace(day=calendar.monthrange(m_dt.year, m_dt.month)[1])
+            return start_date, end_date
+        except ValueError:
+            pass
+
+    if start_str or end_str:
+        try:
+            start_date = datetime.strptime(start_str, "%Y-%m-%d").date() if start_str else today.replace(day=1)
+        except ValueError:
+            start_date = today.replace(day=1)
+        try:
+            end_date = datetime.strptime(end_str, "%Y-%m-%d").date() if end_str else today.replace(day=calendar.monthrange(today.year, today.month)[1])
+        except ValueError:
+            end_date = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+        if start_date > end_date:
+            start_date, end_date = end_date, start_date
+        return start_date, end_date
+
+    start_date = today.replace(day=1)
+    end_date = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+    return start_date, end_date
+
+
+def _run_monthly_export(request, file_type, *, site=None, fallback_redirect="history"):
+    if file_type not in {"xlsx", "pdf"}:
+        return HttpResponseForbidden("Unsupported export format")
+
+    start_date, end_date = _resolve_export_date_range(request)
+    template_id = request.GET.get("template", "").strip()
+
+    qs = (
+        Submission.objects.filter(checklist_date__range=[start_date, end_date])
+        .select_related("site", "template", "submitted_by")
+        .prefetch_related("answers__item")
+        .order_by("checklist_date", "site__name", "template__name")
+    )
+    if site is not None:
+        qs = qs.filter(site=site)
+    if template_id:
+        qs = qs.filter(template_id=template_id)
+
+    submissions = list(qs)
+    if not submissions:
+        messages.warning(
+            request,
+            f"No submissions found for {site.name if site else 'the selected sites'} between {start_date:%d %b %Y} and {end_date:%d %b %Y}.",
+        )
+        return redirect(request.META.get("HTTP_REFERER") or fallback_redirect)
+
+    if file_type == "xlsx":
+        return range_excel_response(submissions, site, start_date, end_date)
+    return range_pdf_response(submissions, site, start_date, end_date)
+
+
 @login_required
 def history(request):
+    today = timezone.localdate()
+    selected_month = request.GET.get("month", "").strip()
+    selected_template = request.GET.get("template", "").strip()
+    selected_site = request.GET.get("site", "").strip()
+
     if is_admin(request.user):
-        submissions = Submission.objects.select_related("site", "submitted_by").order_by("-checklist_date", "site__name")
-        site_id = request.GET.get("site")
-        if site_id:
-            submissions = submissions.filter(site_id=site_id)
+        submissions = Submission.objects.select_related("site", "template", "submitted_by").prefetch_related("answers__item").order_by("-checklist_date", "site__name")
+        if selected_site:
+            submissions = submissions.filter(site_id=selected_site)
         sites = Site.objects.order_by("name")
+        templates = ChecklistTemplate.objects.order_by("name", "-version")
+        operator_site = None
     else:
-        submissions = Submission.objects.filter(submitted_by=request.user).select_related("site").order_by("-checklist_date")
+        operator_site = assigned_site(request.user)
+        submissions = Submission.objects.filter(submitted_by=request.user).select_related("site", "template").prefetch_related("answers__item").order_by("-checklist_date")
         sites = []
-    return render(request, "checklist/history.html", {"submissions": submissions, "sites": sites, "selected_site": request.GET.get("site", "")})
+        templates = (
+            ChecklistTemplate.objects.filter(site_checklists__site=operator_site).distinct().order_by("name", "-version")
+            if operator_site
+            else ChecklistTemplate.objects.none()
+        )
+
+    if selected_template:
+        submissions = submissions.filter(template_id=selected_template)
+    if selected_month:
+        try:
+            m_dt = datetime.strptime(selected_month, "%Y-%m").date()
+            m_start = m_dt.replace(day=1)
+            m_end = m_dt.replace(day=calendar.monthrange(m_dt.year, m_dt.month)[1])
+            submissions = submissions.filter(checklist_date__range=[m_start, m_end])
+        except ValueError:
+            selected_month = ""
+
+    submissions_list = list(submissions)
+    for sub in submissions_list:
+        sub.choice_summary = summarize_submission_choices(sub, list(sub.answers.all()))
+
+    return render(request, "checklist/history.html", {
+        "submissions": submissions_list,
+        "sites": sites,
+        "templates": templates,
+        "operator_site": operator_site,
+        "selected_site": selected_site,
+        "selected_template": selected_template,
+        "selected_month": selected_month,
+        "export_month": selected_month or today.strftime("%Y-%m"),
+    })
 
 
 @login_required
@@ -456,6 +653,28 @@ def export_submission(request, submission_id, file_type):
     if file_type == "pdf":
         return pdf_response(submission)
     return HttpResponseForbidden("Unsupported export format")
+
+
+@login_required
+@user_passes_test(is_admin)
+def export_monthly(request, file_type):
+    site_id = request.GET.get("site", "").strip()
+    site = get_object_or_404(Site, pk=site_id) if site_id else None
+    return _run_monthly_export(request, file_type, site=site, fallback_redirect="dashboard")
+
+
+@login_required
+def operator_monthly_export(request, file_type):
+    if is_admin(request.user):
+        return export_monthly(request, file_type)
+    site = assigned_site(request.user)
+    if site is None:
+        messages.error(request, "No site is assigned to your account.")
+        return redirect("history")
+    requested_site_id = request.GET.get("site", "").strip()
+    if requested_site_id and str(site.pk) != requested_site_id:
+        raise PermissionDenied
+    return _run_monthly_export(request, file_type, site=site, fallback_redirect="history")
 
 
 @login_required
@@ -568,12 +787,22 @@ def edit_site(request, site_id):
     equipment_form = EquipmentForm()
     checklist_assign_form = SiteChecklistAssignForm(site=site)
     site_checklists = site.checklists.select_related("template").order_by("position", "template__name")
+    site_submissions = list(
+        Submission.objects.filter(site=site)
+        .select_related("site", "template", "submitted_by")
+        .prefetch_related("answers__item")
+        .order_by("-checklist_date")
+    )
+    site_executive = build_executive_summary(site_submissions, sites=[site])[0]
     return render(request, "checklist/edit_site.html", {
         "site": site,
         "form": form,
         "equipment_form": equipment_form,
         "checklist_assign_form": checklist_assign_form,
         "site_checklists": site_checklists,
+        "site_executive": site_executive,
+        "site_executive_list": [site_executive],
+        "current_month_str": timezone.localdate().strftime("%Y-%m"),
     })
 
 
@@ -651,10 +880,12 @@ def manage_checklists(request):
             try:
                 if file_name.endswith(".xlsx") or file_name.endswith(".xls"):
                     template, count = import_uploaded_excel(upload_file, template_name)
+                elif file_name.endswith(".csv"):
+                    template, count = import_uploaded_csv(upload_file, template_name)
                 elif file_name.endswith(".pdf"):
                     template, count = import_uploaded_pdf(upload_file, template_name)
                 else:
-                    messages.error(request, "Unsupported file format. Please upload .xlsx or .pdf.")
+                    messages.error(request, "Unsupported file format. Please upload .xlsx, .csv, or .pdf.")
                     return redirect("manage-checklists")
 
                 # If sites were selected, assign the new template to them
